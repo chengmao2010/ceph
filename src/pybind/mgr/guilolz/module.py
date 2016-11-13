@@ -294,18 +294,40 @@ class Module(MgrModule):
     def serve(self):
         current_dir = os.path.dirname(os.path.abspath(__file__))
 
+        jinja_loader = jinja2.FileSystemLoader(current_dir)
+        env = jinja2.Environment(loader=jinja_loader)
+
         class Root(object):
+            def _toplevel_data(self):
+                """
+                Data consumed by the base.html template
+                """
+                fsmap = global_instance().get_sync_object(FsMap)
+                filesystems = [
+                    {"id": f['id'], "name": f['mdsmap']['fs_name']}
+                    for f in fsmap['filesystems']
+                ]
+
+                return {
+                    'health': global_instance().get_sync_object(Health).data,
+                    'filesystems': filesystems
+                }
+
             @cherrypy.expose
             def index(self):
-                template = jinja2.Template(open(os.path.join(current_dir, "status.html"), "r").read())
+                template = env.get_template("status.html")
 
-                data = {
-                    'health': global_instance().get_sync_object(Health).data,
+                toplevel_data = {
+                    'health': global_instance().get_sync_object(Health).data
+                }
+
+                content_data = {
                     "fs_status": global_instance().fs_status()
                 }
 
                 return template.render(
-                    data=json.dumps(data, indent=2),
+                    toplevel_data=json.dumps(toplevel_data, indent=2),
+                    content_data=json.dumps(content_data, indent=2),
                     ceph_version=global_instance().version
                 )
 
@@ -313,6 +335,11 @@ class Module(MgrModule):
             @cherrypy.tools.json_out()
             def fs_status(self):
                 return global_instance().fs_status()
+
+            @cherrypy.expose
+            @cherrypy.tools.json_out()
+            def toplevel_data(self):
+                return self._toplevel_data()
 
         # Configure django.request logger
         logging.getLogger("django.request").handlers = self.log.handlers
