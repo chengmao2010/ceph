@@ -1,0 +1,135 @@
+
+
+<html>
+
+<head>
+    <script src="/static/rivets.bundled.min.js"></script>
+    <script src="/static/jquery.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/underscore.js/1.8.3/underscore-min.js"></script>
+
+    <link rel="stylesheet" type="text/css" href="/static/style.css">
+
+    <script>
+        $(document).ready(function(){
+            var server_data = {{ data }};
+
+            var refresh = function() {
+                $.get("/fs_status", function(data) {
+                    _.extend(server_data.fs_status, data);
+                    setTimeout(refresh, 5000);
+                });
+            };
+
+            rivets.configure({
+                preloadData: true,
+                prefix: "rv",
+                templateDelimiters: ["{", "}"]
+            });
+
+            rivets.formatters.dimless = function(n){
+                var width=4;
+                var units = [' ', 'k', 'M', 'G', 'T', 'P'];
+                var unit = 0;
+
+                while (Math.floor(n / (1000**unit)).toString().length > width - 1) {
+                    unit = unit + 1;
+                }
+
+                var truncated_float;
+                if (unit > 0) {
+                    truncated_float = (n / Math.pow(1000.0, unit)).toString().substring(0, width - 1);
+                } else {
+                    truncated_float = n;
+                }
+
+                return truncated_float + units[unit];
+            }
+
+            rivets.bind($("#health"), server_data.health);
+            rivets.bind($("#fs_status"), server_data.fs_status);
+            setTimeout(refresh, 5000);
+        });
+    </script>
+</head>
+
+<body>
+<img src="/static/Ceph_Logo_Standard_RGB_White_120411_fa.png" width="123px" height="34px"/>
+
+<div id="health">
+<h2>Health</h2>
+Overall: {overall_status}
+</div>
+
+<div id="fs_status">
+<div rv-each-filesystem="filesystems">
+    <h2>
+        Filesystem {filesystem.name}
+    </h2>
+    Clients: {filesystem.client_count}
+
+    <h3>Ranks</h3>
+    <table>
+        <thead>
+        <tr>
+            <th>Rank</th>
+            <th>State</th>
+            <th>Daemon</th>
+            <th>Activity</th>
+            <th>Dentries</th>
+            <th>Inodes</th>
+        </tr>
+        </thead>
+        <tbody>
+        <tr rv-each-rank="filesystem.ranks">
+            <td>{rank.rank}</td>
+            <td>{rank.state}</td>
+            <td>{rank.mds}</td>
+            <td>{rank.activity}</td>
+            <td>{rank.dns | dimless}</td>
+            <td>{rank.inos | dimless}</td>
+        </tr>
+        </tbody>
+    </table>
+    <h3>Pools</h3>
+    <table>
+        <thead>
+        <tr>
+            <th>Pool</th>
+            <th>Type</th>
+            <th>Used</th>
+            <th>Avail</th>
+        </tr>
+        </thead>
+        <tbody>
+        <tr rv-each-pool="filesystem.pools">
+            <td>{pool.pool}</td>
+            <td>{pool.type}</td>
+            <td>{pool.used | dimless}</td>
+            <td>{pool.avail | dimless}</td>
+        </tr>
+        </tbody>
+    </table>
+</div>
+    <h3>Standbys</h3>
+    <table>
+        <thead>
+        <tr>
+            <th>Daemon</th>
+        </tr>
+        </thead>
+        <tbody>
+        <tr rv-each-standby="standbys">
+            <td>{standby.name}</td>
+        </tr>
+        </tbody>
+    </table>
+</div>
+
+<!--
+<pre>
+{{ data }}
+</pre>
+-->
+
+</body>
+</html>
