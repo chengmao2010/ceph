@@ -346,6 +346,26 @@ class Module(MgrModule):
                     content_data=json.dumps(self._health(), indent=2)
                 )
 
+            @cherrypy.expose
+            def servers(self):
+                template = env.get_template("servers.html")
+                return template.render(
+                    ceph_version=global_instance().version,
+                    toplevel_data=json.dumps(self._toplevel_data(), indent=2),
+                    content_data=json.dumps(self._servers(), indent=2)
+                )
+
+            def _servers(self):
+                open("/tmp/out", 'w').write(json.dumps(global_instance().list_servers(), indent=2))
+                return {
+                    'servers': global_instance().list_servers()
+                }
+
+            @cherrypy.expose
+            @cherrypy.tools.json_out()
+            def servers_data(self):
+                return self._servers()
+
             def _health(self):
                 # Fuse osdmap with pg_summary to get description of pools
                 # including their PG states
