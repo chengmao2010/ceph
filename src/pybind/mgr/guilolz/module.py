@@ -1,6 +1,6 @@
 
 """
-A RESTful API for Ceph
+Demonstrate writing a Ceph web interface inside a mgr module.
 """
 
 # We must share a global reference to this instance, because it is the
@@ -305,14 +305,14 @@ class Module(MgrModule):
                 }
 
                 return template.render(
-                    data=json.dumps(data, indent=2)
+                    data=json.dumps(data, indent=2),
+                    ceph_version=global_instance().version
                 )
 
             @cherrypy.expose
             @cherrypy.tools.json_out()
             def fs_status(self):
                 return global_instance().fs_status()
-
 
         # Configure django.request logger
         logging.getLogger("django.request").handlers = self.log.handlers

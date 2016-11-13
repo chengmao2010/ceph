@@ -1,13 +1,324 @@
 
+<!DOCTYPE html>
 
 <html>
 
 <head>
+    <title>Ceph</title>
+
+      <meta content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" name="viewport">
+      <link rel="stylesheet" href="/static/AdminLTE-2.3.7/bootstrap/css/bootstrap.min.css">
+      <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.5.0/css/font-awesome.min.css">
+      <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/ionicons/2.0.1/css/ionicons.min.css">
+      <link rel="stylesheet" href="/static/AdminLTE-2.3.7/dist/css/AdminLTE.min.css">
+      <link rel="stylesheet" href="/static/AdminLTE-2.3.7/dist/css/skins/skin-blue.min.css">
+
+        <link rel="shortcut icon" href="http://ceph.com/wp-content/themes/ceph/favicon.ico">
+      <link rel="shortcut icon" href="/static/favicon.ico">
+</head>
+
+<body class="hold-transition skin-blue sidebar-mini">
+<div class="wrapper">
+
+  <!-- Main Header -->
+    <header class="main-header">
+        <!-- Logo -->
+        <a href="index2.html" class="logo">
+            <!--
+          <span class="logo-mini"><b>A</b>LT</span>
+          <span class="logo-lg"><b>Admin</b>LTE</span> -->
+      <span class="logo-lg">
+        <img src="/static/Ceph_Logo_Standard_RGB_White_120411_fa.png"
+             width="123px" height="34px"/>
+          </span>
+        </a>
+
+        <!-- Header Navbar -->
+        <nav class="navbar navbar-static-top" role="navigation">
+            <!-- Sidebar toggle button-->
+            <a href="#" class="sidebar-toggle" data-toggle="offcanvas"
+               role="button">
+                <span class="sr-only">Toggle navigation</span>
+            </a>
+
+            <div id="health">
+                Overall: {overall_status}
+            </div>
+
+            <!-- Navbar Right Menu -->
+            <div class="navbar-custom-menu">
+                <ul class="nav navbar-nav">
+
+                </ul>
+            </div>
+        </nav>
+    </header>
+  <!-- Left side column. contains the logo and sidebar -->
+  <aside class="main-sidebar">
+
+    <!-- sidebar: style can be found in sidebar.less -->
+    <section class="sidebar">
+      <!-- Sidebar Menu -->
+      <ul class="sidebar-menu">
+        <!-- Optionally, you can add icons to the links -->
+        <li><a href="#"><i class="fa fa-heart"></i>
+            <span>Cluster health</span></a>
+        </li>
+        <li><a href="#"><i class="fa fa-server"></i>
+            <span>Servers</span></a>
+        </li>
+        <li class="treeview active">
+          <a href="#"><i class="fa fa-folder"></i> <span>Filesystems</span>
+            <span class="pull-right-container">
+              <i class="fa fa-angle-left pull-right"></i>
+            </span>
+          </a>
+          <ul class="treeview-menu menu-open">
+            <li><a href="#">Link in level 2</a></li>
+            <li><a href="#">Link in level 2</a></li>
+          </ul>
+        </li>
+      </ul>
+      <!-- /.sidebar-menu -->
+    </section>
+    <!-- /.sidebar -->
+  </aside>
+
+  <!-- Content Wrapper. Contains page content -->
+  <div class="content-wrapper">
+    <!-- Content Header (Page header) -->
+    <section class="content-header">
+      <h1>
+        Filesystems
+        <!--<small>Optional description</small>-->
+      </h1>
+        <!--
+      <ol class="breadcrumb">
+        <li><a href="#"><i class="fa fa-dashboard"></i> Level</a></li>
+        <li class="active">Here</li>
+      </ol>
+      -->
+    </section>
+
+    <!-- Main content -->
+    <section class="content">
+
+<div id="fs_status">
+<div rv-each-filesystem="filesystems">
+    <h2>
+        Filesystem {filesystem.name}
+    </h2>
+    <div class="info-box bg-red">
+      <!-- Apply any bg-* class to to the icon to color it -->
+      <span class="info-box-icon"><i class="fa fa-desktop"></i></span>
+      <div class="info-box-content">
+        <span class="info-box-text">Clients</span>
+        <span class="info-box-number">{filesystem.client_count}</span>
+      </div><!-- /.info-box-content -->
+    </div><!-- /.info-box -->
+
+    <div class="row">
+        <div class="col-sm-6">
+    <div class="box">
+        <div class="box-header">
+            <h3 class="box-title">Ranks</h3>
+        </div>
+        <div class="box-body">
+            <table class="table table-condensed">
+                <thead>
+                <tr>
+                    <th>Rank</th>
+                    <th>State</th>
+                    <th>Daemon</th>
+                    <th>Activity</th>
+                    <th>Dentries</th>
+                    <th>Inodes</th>
+                </tr>
+                </thead>
+                <tbody>
+                <tr rv-each-rank="filesystem.ranks">
+                    <td>{rank.rank}</td>
+                    <td>{rank.state}</td>
+                    <td>{rank.mds}</td>
+                    <td>{rank.activity}</td>
+                    <td>{rank.dns | dimless}</td>
+                    <td>{rank.inos | dimless}</td>
+                </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+        <div class="col-sm-6">
+    <div class="box">
+        <div class="box-header">
+            <h3 class="box-title">Pools</h3>
+        </div>
+        <div class="box-body">
+            <table class="table table-condensed">
+                <thead>
+                <tr>
+                    <th>Pool</th>
+                    <th>Type</th>
+                    <th>Used</th>
+                    <th>Avail</th>
+                    <th></th>
+                </tr>
+                </thead>
+                <tbody>
+                <tr rv-each-pool="filesystem.pools">
+                    <td>{pool.pool}</td>
+                    <td>{pool.type}</td>
+                    <td>{pool.used | dimless}</td>
+                    <td>{pool.avail | dimless}</td>
+                    <td>
+                        <div class="progress" style="width: 100px; height: 20px;">
+                            <div class="progress-bar progress-bar-red" style="width: 70%"></div>
+                        </div>
+                    </td>
+                </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+    </div>
+        </div>
+
+</div>
+    <div class="box">
+        <div class="box-header">
+            <h3 class="box-title">Standby daemons</h3>
+        </div>
+        <div class="box-body">
+            <table>
+                <thead>
+                <tr>
+                    <th>Daemon</th>
+                </tr>
+                </thead>
+                <tbody>
+                <tr rv-each-standby="standbys">
+                    <td>{standby.name}</td>
+                </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+
+    </section>
+    <!-- /.content -->
+  </div>
+  <!-- /.content-wrapper -->
+
+  <!-- Main Footer -->
+  <footer class="main-footer">
+    <!-- To the right -->
+    <div class="pull-right hidden-xs">
+      {{ ceph_version }}
+    </div>
+    <!-- Default to the left -->
+    <strong>Copyright &copy; 2016 by Ceph Contributors.</strong> Free software (LGPL 2.1)
+  </footer>
+
+  <!-- Control Sidebar -->
+  <aside class="control-sidebar control-sidebar-dark">
+    <!-- Create the tabs -->
+    <ul class="nav nav-tabs nav-justified control-sidebar-tabs">
+      <li class="active"><a href="#control-sidebar-home-tab" data-toggle="tab"><i class="fa fa-home"></i></a></li>
+      <li><a href="#control-sidebar-settings-tab" data-toggle="tab"><i class="fa fa-gears"></i></a></li>
+    </ul>
+    <!-- Tab panes -->
+    <div class="tab-content">
+      <!-- Home tab content -->
+      <div class="tab-pane active" id="control-sidebar-home-tab">
+        <h3 class="control-sidebar-heading">Recent Activity</h3>
+        <ul class="control-sidebar-menu">
+          <li>
+            <a href="javascript::;">
+              <i class="menu-icon fa fa-birthday-cake bg-red"></i>
+
+              <div class="menu-info">
+                <h4 class="control-sidebar-subheading">Langdon's Birthday</h4>
+
+                <p>Will be 23 on April 24th</p>
+              </div>
+            </a>
+          </li>
+        </ul>
+        <!-- /.control-sidebar-menu -->
+
+        <h3 class="control-sidebar-heading">Tasks Progress</h3>
+        <ul class="control-sidebar-menu">
+          <li>
+            <a href="javascript::;">
+              <h4 class="control-sidebar-subheading">
+                Custom Template Design
+                <span class="pull-right-container">
+                  <span class="label label-danger pull-right">70%</span>
+                </span>
+              </h4>
+
+              <div class="progress progress-xxs">
+                <div class="progress-bar progress-bar-danger" style="width: 70%"></div>
+              </div>
+            </a>
+          </li>
+        </ul>
+        <!-- /.control-sidebar-menu -->
+
+      </div>
+      <!-- /.tab-pane -->
+      <!-- Stats tab content -->
+      <div class="tab-pane" id="control-sidebar-stats-tab">Stats Tab Content</div>
+      <!-- /.tab-pane -->
+      <!-- Settings tab content -->
+      <div class="tab-pane" id="control-sidebar-settings-tab">
+        <form method="post">
+          <h3 class="control-sidebar-heading">General Settings</h3>
+
+          <div class="form-group">
+            <label class="control-sidebar-subheading">
+              Report panel usage
+              <input type="checkbox" class="pull-right" checked>
+            </label>
+
+            <p>
+              Some information about this general settings option
+            </p>
+          </div>
+          <!-- /.form-group -->
+        </form>
+      </div>
+      <!-- /.tab-pane -->
+    </div>
+  </aside>
+  <!-- /.control-sidebar -->
+  <!-- Add the sidebar's background. This div must be placed
+       immediately after the control sidebar -->
+  <div class="control-sidebar-bg"></div>
+
+</div>
+
+<!--
+<pre>
+{{ data }}
+</pre>
+-->
+
+<script src="/static/AdminLTE-2.3.7/plugins/jQuery/jquery-2.2.3.min.js"></script>
+<!-- Bootstrap 3.3.6 -->
+
+<!-- AdminLTE App -->
+
     <script src="/static/rivets.bundled.min.js"></script>
-    <script src="/static/jquery.min.js"></script>
+    <!--<script src="/static/jquery.min.js"></script>-->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/underscore.js/1.8.3/underscore-min.js"></script>
 
-    <link rel="stylesheet" type="text/css" href="/static/style.css">
+    <script src="/static/AdminLTE-2.3.7/bootstrap/js/bootstrap.min.js"></script>
+    <script src="/static/AdminLTE-2.3.7/dist/js/app.min.js"></script>
+
 
     <script>
         $(document).ready(function(){
@@ -50,86 +361,6 @@
             setTimeout(refresh, 5000);
         });
     </script>
-</head>
-
-<body>
-<img src="/static/Ceph_Logo_Standard_RGB_White_120411_fa.png" width="123px" height="34px"/>
-
-<div id="health">
-<h2>Health</h2>
-Overall: {overall_status}
-</div>
-
-<div id="fs_status">
-<div rv-each-filesystem="filesystems">
-    <h2>
-        Filesystem {filesystem.name}
-    </h2>
-    Clients: {filesystem.client_count}
-
-    <h3>Ranks</h3>
-    <table>
-        <thead>
-        <tr>
-            <th>Rank</th>
-            <th>State</th>
-            <th>Daemon</th>
-            <th>Activity</th>
-            <th>Dentries</th>
-            <th>Inodes</th>
-        </tr>
-        </thead>
-        <tbody>
-        <tr rv-each-rank="filesystem.ranks">
-            <td>{rank.rank}</td>
-            <td>{rank.state}</td>
-            <td>{rank.mds}</td>
-            <td>{rank.activity}</td>
-            <td>{rank.dns | dimless}</td>
-            <td>{rank.inos | dimless}</td>
-        </tr>
-        </tbody>
-    </table>
-    <h3>Pools</h3>
-    <table>
-        <thead>
-        <tr>
-            <th>Pool</th>
-            <th>Type</th>
-            <th>Used</th>
-            <th>Avail</th>
-        </tr>
-        </thead>
-        <tbody>
-        <tr rv-each-pool="filesystem.pools">
-            <td>{pool.pool}</td>
-            <td>{pool.type}</td>
-            <td>{pool.used | dimless}</td>
-            <td>{pool.avail | dimless}</td>
-        </tr>
-        </tbody>
-    </table>
-</div>
-    <h3>Standbys</h3>
-    <table>
-        <thead>
-        <tr>
-            <th>Daemon</th>
-        </tr>
-        </thead>
-        <tbody>
-        <tr rv-each-standby="standbys">
-            <td>{standby.name}</td>
-        </tr>
-        </tbody>
-    </table>
-</div>
-
-<!--
-<pre>
-{{ data }}
-</pre>
--->
 
 </body>
 </html>
