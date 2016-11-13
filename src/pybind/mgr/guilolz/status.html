@@ -1,125 +1,117 @@
-
 {% extends "base.html" %}
 
 {% block content %}
 
-        <script>
+<script>
         $(document).ready(function(){
             // Pre-populated initial data at page load
             var content_data = {{ content_data }};
 
             var refresh = function() {
-                $.get("/fs_status", function(data) {
+                $.get("/filesystem_data/" + content_data.fs_status.filesystem.id  + "/", function(data) {
                     _.extend(content_data.fs_status, data);
                     setTimeout(refresh, 5000);
                 });
             };
 
-            rivets.bind($("#fs_status"), content_data.fs_status);
+            console.log(content_data.fs_status);
+            rivets.bind($("div#content"), content_data.fs_status);
+            console.log($("div#content").length);
             setTimeout(refresh, 5000);
         });
-    </script>
 
 
-    <!-- Content Header (Page header) -->
-    <section class="content-header">
-      <h1>
-        Filesystems
-        <!--<small>Optional description</small>-->
-      </h1>
-        <!--
-      <ol class="breadcrumb">
-        <li><a href="#"><i class="fa fa-dashboard"></i> Level</a></li>
-        <li class="active">Here</li>
-      </ol>
-      -->
-    </section>
+</script>
 
-    <!-- Main content -->
-    <section class="content">
 
-<div id="fs_status">
-<div rv-each-filesystem="filesystems">
-    <h2>
+<section class="content-header">
+    <h1>
         Filesystem {filesystem.name}
-    </h2>
+    </h1>
+</section>
+
+<section class="content">
     <div class="info-box bg-red">
-      <!-- Apply any bg-* class to to the icon to color it -->
-      <span class="info-box-icon"><i class="fa fa-desktop"></i></span>
-      <div class="info-box-content">
-        <span class="info-box-text">Clients</span>
-        <span class="info-box-number">{filesystem.client_count}</span>
-      </div><!-- /.info-box-content -->
-    </div><!-- /.info-box -->
+        <!-- Apply any bg-* class to to the icon to color it -->
+        <span class="info-box-icon"><i class="fa fa-desktop"></i></span>
+
+        <div class="info-box-content">
+            <span class="info-box-text">Clients</span>
+            <span class="info-box-number">{filesystem.client_count}</span>
+        </div>
+        <!-- /.info-box-content -->
+    </div>
+    <!-- /.info-box -->
 
     <div class="row">
         <div class="col-sm-6">
-    <div class="box">
-        <div class="box-header">
-            <h3 class="box-title">Ranks</h3>
+            <div class="box">
+                <div class="box-header">
+                    <h3 class="box-title">Ranks</h3>
+                </div>
+                <div class="box-body">
+                    <table class="table table-condensed">
+                        <thead>
+                        <tr>
+                            <th>Rank</th>
+                            <th>State</th>
+                            <th>Daemon</th>
+                            <th>Activity</th>
+                            <th>Dentries</th>
+                            <th>Inodes</th>
+                        </tr>
+                        </thead>
+                        <tbody>
+                        <tr rv-each-rank="filesystem.ranks">
+                            <td>{rank.rank}</td>
+                            <td>{rank.state}</td>
+                            <td>{rank.mds}</td>
+                            <td>{rank.activity}</td>
+                            <td>{rank.dns | dimless}</td>
+                            <td>{rank.inos | dimless}</td>
+                        </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
         </div>
-        <div class="box-body">
-            <table class="table table-condensed">
-                <thead>
-                <tr>
-                    <th>Rank</th>
-                    <th>State</th>
-                    <th>Daemon</th>
-                    <th>Activity</th>
-                    <th>Dentries</th>
-                    <th>Inodes</th>
-                </tr>
-                </thead>
-                <tbody>
-                <tr rv-each-rank="filesystem.ranks">
-                    <td>{rank.rank}</td>
-                    <td>{rank.state}</td>
-                    <td>{rank.mds}</td>
-                    <td>{rank.activity}</td>
-                    <td>{rank.dns | dimless}</td>
-                    <td>{rank.inos | dimless}</td>
-                </tr>
-                </tbody>
-            </table>
-        </div>
-    </div>
-</div>
         <div class="col-sm-6">
-    <div class="box">
-        <div class="box-header">
-            <h3 class="box-title">Pools</h3>
-        </div>
-        <div class="box-body">
-            <table class="table table-condensed">
-                <thead>
-                <tr>
-                    <th>Pool</th>
-                    <th>Type</th>
-                    <th>Used</th>
-                    <th>Avail</th>
-                    <th></th>
-                </tr>
-                </thead>
-                <tbody>
-                <tr rv-each-pool="filesystem.pools">
-                    <td>{pool.pool}</td>
-                    <td>{pool.type}</td>
-                    <td>{pool.used | dimless}</td>
-                    <td>{pool.avail | dimless}</td>
-                    <td>
-                        <div class="progress" style="width: 100px; height: 20px;">
-                            <div class="progress-bar progress-bar-red" style="width: 70%"></div>
-                        </div>
-                    </td>
-                </tr>
-                </tbody>
-            </table>
-        </div>
-    </div>
-    </div>
+            <div class="box">
+                <div class="box-header">
+                    <h3 class="box-title">Pools</h3>
+                </div>
+                <div class="box-body">
+                    <table class="table table-condensed">
+                        <thead>
+                        <tr>
+                            <th>Pool</th>
+                            <th>Type</th>
+                            <th>Used</th>
+                            <th>Avail</th>
+                            <th></th>
+                        </tr>
+                        </thead>
+                        <tbody>
+                        <tr rv-each-pool="filesystem.pools">
+                            <td>{pool.pool}</td>
+                            <td>{pool.type}</td>
+                            <td>{pool.used | dimless}</td>
+                            <td>{pool.avail | dimless}</td>
+                            <td>
+                                <div class="progress"
+                                     style="width: 100px; height: 20px;">
+                                    <div class="progress-bar progress-bar-red"
+                                         style="width: 70%"></div>
+                                </div>
+                            </td>
+                        </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
         </div>
 
-</div>
+    </div>
     <div class="box">
         <div class="box-header">
             <h3 class="box-title">Standby daemons</h3>
@@ -139,10 +131,7 @@
             </table>
         </div>
     </div>
-</div>
-
-
-    </section>
-    <!-- /.content -->
+</section>
+<!-- /.content -->
 
 {% endblock %}

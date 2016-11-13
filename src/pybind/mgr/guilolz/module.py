@@ -150,130 +150,128 @@ class Module(MgrModule):
         else:
             return formatted
 
-    def fs_status(self):
+    def fs_status(self, fs_id):
         mds_versions = defaultdict(list)
 
         filesystems = []
 
         fsmap = self.get("fs_map")
-        for filesystem in fsmap['filesystems']:
-            rank_table = []
+        filesystem = None
+        for fs in fsmap['filesystems']:
+            if fs['id'] == fs_id:
+                filesystem = fs
+                break
 
-            mdsmap = filesystem['mdsmap']
+        rank_table = []
 
-            client_count = 0
+        mdsmap = filesystem['mdsmap']
 
-            for rank in mdsmap["in"]:
-                up = "mds_{0}".format(rank) in mdsmap["up"]
-                if up:
-                    gid = mdsmap['up']["mds_{0}".format(rank)]
-                    info = mdsmap['info']['gid_{0}'.format(gid)]
-                    dns = self.get_latest("mds", info['name'], "mds.inodes")
-                    inos = self.get_latest("mds", info['name'], "mds_mem.ino")
+        client_count = 0
 
-                    if rank == 0:
-                        client_count = self.get_latest("mds", info['name'],
-                                                       "mds_sessions.session_count")
-                    elif client_count == 0:
-                        # In case rank 0 was down, look at another rank's
-                        # sessionmap to get an indication of clients.
-                        client_count = self.get_latest("mds", info['name'],
-                                                       "mds_sessions.session_count")
+        for rank in mdsmap["in"]:
+            up = "mds_{0}".format(rank) in mdsmap["up"]
+            if up:
+                gid = mdsmap['up']["mds_{0}".format(rank)]
+                info = mdsmap['info']['gid_{0}'.format(gid)]
+                dns = self.get_latest("mds", info['name'], "mds.inodes")
+                inos = self.get_latest("mds", info['name'], "mds_mem.ino")
 
-                    laggy = "laggy_since" in info
+                if rank == 0:
+                    client_count = self.get_latest("mds", info['name'],
+                                                   "mds_sessions.session_count")
+                elif client_count == 0:
+                    # In case rank 0 was down, look at another rank's
+                    # sessionmap to get an indication of clients.
+                    client_count = self.get_latest("mds", info['name'],
+                                                   "mds_sessions.session_count")
 
-                    state = info['state'].split(":")[1]
-                    if laggy:
-                        state += "(laggy)"
+                laggy = "laggy_since" in info
 
-                    # if state == "active" and not laggy:
-                    #     c_state = self.colorize(state, self.GREEN)
-                    # else:
-                    #     c_state = self.colorize(state, self.YELLOW)
+                state = info['state'].split(":")[1]
+                if laggy:
+                    state += "(laggy)"
 
-                    # Populate based on context of state, e.g. client
-                    # ops for an active daemon, replay progress, reconnect
-                    # progress
-                    activity = ""
+                # if state == "active" and not laggy:
+                #     c_state = self.colorize(state, self.GREEN)
+                # else:
+                #     c_state = self.colorize(state, self.YELLOW)
 
-                    if state == "active":
-                        activity = "Reqs: " + self.format_dimless(
-                            self.get_rate("mds", info['name'], "mds_server.handle_client_request"),
-                            5
-                        ) + "/s"
+                # Populate based on context of state, e.g. client
+                # ops for an active daemon, replay progress, reconnect
+                # progress
+                activity = ""
 
-                    metadata = self.get_metadata('mds', info['name'])
-                    mds_versions[metadata['ceph_version']].append(info['name'])
-                    rank_table.append(
-                        {
-                            "rank": rank,
-                            "state": state,
-                            "mds": info['name'],
-                            "activity": activity,
-                            "dns": dns,
-                            "inos": inos
-                        }
-                    )
+                if state == "active":
+                    activity = "Reqs: " + self.format_dimless(
+                        self.get_rate("mds", info['name'], "mds_server.handle_client_request"),
+                        5
+                    ) + "/s"
 
-                else:
-                    rank_table.append(
-                        {
-                            "rank": rank,
-                            "state": "failed",
-                            "mds": "",
-                            "activity": "",
-                            "dns": 0,
-                            "inos": 0
-                        }
-                    )
-
-            # Find the standby replays
-            for gid_str, daemon_info in mdsmap['info'].iteritems():
-                if daemon_info['state'] != "up:standby-replay":
-                    continue
-
-                inos = self.get_latest("mds", daemon_info['name'], "mds_mem.ino")
-                dns = self.get_latest("mds", daemon_info['name'], "mds.inodes")
-
-                activity = "Evts: " + self.format_dimless(
-                    self.get_rate("mds", daemon_info['name'], "mds_log.replay"),
-                    5
-                ) + "/s"
-
+                metadata = self.get_metadata('mds', info['name'])
+                mds_versions[metadata['ceph_version']].append(info['name'])
                 rank_table.append(
                     {
-                        "rank": "{0}-s".format(daemon_info['rank']),
-                        "state": "standby-replay",
-                        "mds": daemon_info['name'],
+                        "rank": rank,
+                        "state": state,
+                        "mds": info['name'],
                         "activity": activity,
                         "dns": dns,
                         "inos": inos
                     }
                 )
 
-            df = self.get("df")
-            pool_stats = dict([(p['id'], p['stats']) for p in df['pools']])
-            osdmap = self.get("osd_map")
-            pools = dict([(p['pool'], p) for p in osdmap['pools']])
-            metadata_pool_id = mdsmap['metadata_pool']
-            data_pool_ids = mdsmap['data_pools']
+            else:
+                rank_table.append(
+                    {
+                        "rank": rank,
+                        "state": "failed",
+                        "mds": "",
+                        "activity": "",
+                        "dns": 0,
+                        "inos": 0
+                    }
+                )
 
-            pools_table = []
-            for pool_id in [metadata_pool_id] + data_pool_ids:
-                pool_type = "metadata" if pool_id == metadata_pool_id else "data"
-                stats = pool_stats[pool_id]
-                pools_table.append({
-                    "pool": pools[pool_id]['pool_name'],
-                    "type": pool_type,
-                    "used": stats['bytes_used'],
-                    "avail": stats['max_avail']
-                })
+        # Find the standby replays
+        for gid_str, daemon_info in mdsmap['info'].iteritems():
+            if daemon_info['state'] != "up:standby-replay":
+                continue
 
-            filesystems.append({
-                "name": mdsmap['fs_name'],
-                "client_count": client_count,
-                "ranks": rank_table,
-                "pools": pools_table
+            inos = self.get_latest("mds", daemon_info['name'], "mds_mem.ino")
+            dns = self.get_latest("mds", daemon_info['name'], "mds.inodes")
+
+            activity = "Evts: " + self.format_dimless(
+                self.get_rate("mds", daemon_info['name'], "mds_log.replay"),
+                5
+            ) + "/s"
+
+            rank_table.append(
+                {
+                    "rank": "{0}-s".format(daemon_info['rank']),
+                    "state": "standby-replay",
+                    "mds": daemon_info['name'],
+                    "activity": activity,
+                    "dns": dns,
+                    "inos": inos
+                }
+            )
+
+        df = self.get("df")
+        pool_stats = dict([(p['id'], p['stats']) for p in df['pools']])
+        osdmap = self.get("osd_map")
+        pools = dict([(p['pool'], p) for p in osdmap['pools']])
+        metadata_pool_id = mdsmap['metadata_pool']
+        data_pool_ids = mdsmap['data_pools']
+
+        pools_table = []
+        for pool_id in [metadata_pool_id] + data_pool_ids:
+            pool_type = "metadata" if pool_id == metadata_pool_id else "data"
+            stats = pool_stats[pool_id]
+            pools_table.append({
+                "pool": pools[pool_id]['pool_name'],
+                "type": pool_type,
+                "used": stats['bytes_used'],
+                "avail": stats['max_avail']
             })
 
         standby_table = []
@@ -286,7 +284,13 @@ class Module(MgrModule):
             })
 
         return {
-            "filesystems": filesystems,
+            "filesystem": {
+                "id": fs_id,
+                "name": mdsmap['fs_name'],
+                "client_count": client_count,
+                "ranks": rank_table,
+                "pools": pools_table
+            },
             "standbys": standby_table,
             "versions": mds_versions
         }
@@ -304,8 +308,12 @@ class Module(MgrModule):
                 """
                 fsmap = global_instance().get_sync_object(FsMap)
                 filesystems = [
-                    {"id": f['id'], "name": f['mdsmap']['fs_name']}
-                    for f in fsmap['filesystems']
+                    {
+                        "id": f['id'],
+                        "name": f['mdsmap']['fs_name'],
+                        "url": "/filesystem/{0}/".format(f['id'])
+                    }
+                    for f in fsmap.data['filesystems']
                 ]
 
                 return {
@@ -314,27 +322,69 @@ class Module(MgrModule):
                 }
 
             @cherrypy.expose
-            def index(self):
+            def filesystem(self, fs_id):
                 template = env.get_template("status.html")
 
-                toplevel_data = {
-                    'health': global_instance().get_sync_object(Health).data
-                }
+                toplevel_data = self._toplevel_data()
 
                 content_data = {
-                    "fs_status": global_instance().fs_status()
+                    "fs_status": global_instance().fs_status(int(fs_id))
                 }
 
                 return template.render(
+                    ceph_version=global_instance().version,
                     toplevel_data=json.dumps(toplevel_data, indent=2),
-                    content_data=json.dumps(content_data, indent=2),
-                    ceph_version=global_instance().version
+                    content_data=json.dumps(content_data, indent=2)
                 )
 
             @cherrypy.expose
+            def health(self):
+                template = env.get_template("health.html")
+                return template.render(
+                    ceph_version=global_instance().version,
+                    toplevel_data=json.dumps(self._toplevel_data(), indent=2),
+                    content_data=json.dumps(self._health(), indent=2)
+                )
+
+            def _health(self):
+                # Fuse osdmap with pg_summary to get description of pools
+                # including their PG states
+                osd_map = global_instance().get_sync_object(OsdMap).data
+                pg_summary = global_instance().get_sync_object(PgSummary).data
+                df = global_instance().get("df")
+                pool_stats = dict([(p['id'], p['stats']) for p in df['pools']])
+                pools = []
+
+                for pool in osd_map['pools']:
+                    pool['pg_status'] = pg_summary['by_pool'][pool['pool'].__str__()]
+                    pool['stats'] = pool_stats[pool['pool']]
+                    pools.append(pool)
+
+                # Not needed, skip the effort of transmitting this
+                # to UI
+                del osd_map['pg_temp']
+
+                return {
+                    "health": global_instance().get_sync_object(Health).data,
+                    "mon_status": global_instance().get_sync_object(
+                        MonStatus).data,
+                    "osd_map": osd_map,
+                    "pools": pools
+                }
+
+            @cherrypy.expose
             @cherrypy.tools.json_out()
-            def fs_status(self):
-                return global_instance().fs_status()
+            def health_data(self):
+                return self._health()
+
+            @cherrypy.expose
+            def index(self):
+                return self.health()
+
+            @cherrypy.expose
+            @cherrypy.tools.json_out()
+            def filesystem_data(self, fs_id):
+                return global_instance().fs_status(int(fs_id))
 
             @cherrypy.expose
             @cherrypy.tools.json_out()
