@@ -180,6 +180,7 @@ void Mgr::init()
   // Subscribe to OSDMap update to pass on to ClusterState
   objecter->maybe_request_map();
 
+  monc->sub_want("log-info", 0, 0);
   monc->sub_want("mgrdigest", 0, 0);
 
   // Prepare to receive FSMap and request it
@@ -197,7 +198,6 @@ void Mgr::init()
   waiting_for_fs_map = nullptr;
   dout(4) << "Got FSMap." << dendl;
 
-  monc->sub_want("log-info", 0, 0);
 
   // Wait for MgrDigest...?
   // TODO
@@ -425,7 +425,7 @@ void Mgr::handle_log(MLog *m)
   for (const auto &e : m->entries) {
     std::ostringstream ss;
     ss << e.stamp << " " << e.who.name << " " << e.prio << " " << e.msg;
-    py_modules.notify_all("log", ss.str());
+    py_modules.notify_all(e);
   }
 }
 
