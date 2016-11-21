@@ -55,6 +55,13 @@ class Module(MgrModule):
         self.log.info("Constructing module {0}: instance {1}".format(
             __name__, _global_instance))
 
+    def notify(self, notify_type, notify_val):
+        if notify_type == "clog":
+            log.info("clog: {0}".format(notify_val["message"]))
+            log.info("clog: {0}".format(json.dumps(notify_val)))
+        else:
+            pass
+
     def get_sync_object(self, object_type, path=None):
         if object_type == OsdMap:
             data = self.get("osd_map")
