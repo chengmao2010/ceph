@@ -177,12 +177,12 @@ public:
   explicit MDCacheLogContext(MDCache *mdc_) : mdcache(mdc_) {}
 };
 
-MDCache::MDCache(MDSRank *m) :
+MDCache::MDCache(MDSRank *m, PurgeQueue &purge_queue_) :
   mds(m),
   filer(m->objecter, m->finisher),
   exceeded_size_limit(false),
   recovery_queue(m),
-  stray_manager(m)
+  stray_manager(m, purge_queue_)
 {
   migrator.reset(new Migrator(mds, this));
   root = NULL;
@@ -479,8 +479,6 @@ void MDCache::create_mydir_hierarchy(MDSGather *gather)
   mydir->commit(0, gather->new_sub());
 
   myin->store(gather->new_sub());
-
-  stray_manager.purge_queue.create(new C_IO_Wrapper(mds, gather->new_sub()));
 }
 
 struct C_MDC_CreateSystemFile : public MDCacheLogContext {
@@ -608,8 +606,6 @@ void MDCache::open_mydir_inode(MDSInternalContextBase *c)
 
   CInode *in = create_system_inode(MDS_INO_MDSDIR(mds->get_nodeid()), S_IFDIR|0755);  // initially inaccurate!
   in->fetch(gather.new_sub());
-
-  stray_manager.purge_queue.open(new C_IO_Wrapper(mds, gather.new_sub()));
 
   gather.set_finisher(c);
   gather.activate();

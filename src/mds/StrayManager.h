@@ -70,7 +70,7 @@ class StrayManager
 
   Filer filer;
 
-  PurgeQueue purge_queue;
+  PurgeQueue &purge_queue;
 
   void truncate(CDentry *dn, uint32_t op_allowance);
 
@@ -94,13 +94,6 @@ class StrayManager
    * reflecting it's newly-zeroed length.
    */
   void _truncate_stray_logged(CDentry *dn, LogSegment *ls);
-
-  // FIXME: doing this to let MDCache call through into purgequeue
-  // for initialization and teardown
-  // >>
-  friend class MDCache;
-  friend class MDSRankDispatcher;
-  // <<
 
   friend class StrayManagerIOContext;
   friend class StrayManagerLogContext;
@@ -176,7 +169,7 @@ class StrayManager
 
   // My public interface is for consumption by MDCache
   public:
-  explicit StrayManager(MDSRank *mds);
+  explicit StrayManager(MDSRank *mds, PurgeQueue &purge_queue_);
   void set_logger(PerfCounters *l) {logger = l;}
 
   bool eval_stray(CDentry *dn, bool delay=false);
