@@ -227,7 +227,7 @@ class Filer {
   }
 
   void zero(inodeno_t ino,
-	   file_layout_t *layout,
+	   const file_layout_t *layout,
 	   const SnapContext& snapc,
 	   uint64_t offset,
 	   uint64_t len,
@@ -287,7 +287,7 @@ class Filer {
   }
   // purge range of ino.### objects
   int purge_range(inodeno_t ino,
-		  file_layout_t *layout,
+		  const file_layout_t *layout,
 		  const SnapContext& snapc,
 		  uint64_t first_obj, uint64_t num_obj,
 		  ceph::real_time mtime,
