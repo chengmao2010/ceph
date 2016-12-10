@@ -143,13 +143,13 @@ void MgrPyModule::notify_clog(const LogEntry &log_entry)
 {
   assert(pClassInstance != nullptr);
 
+  PyGILState_STATE gstate;
+  gstate = PyGILState_Ensure();
+
   // Construct python-ized LogEntry
   PyFormatter f;
   log_entry.dump(&f);
   auto py_log_entry = f.get();
-
-  PyGILState_STATE gstate;
-  gstate = PyGILState_Ensure();
 
   // Execute
   auto pValue = PyObject_CallMethod(pClassInstance,
