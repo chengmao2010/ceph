@@ -577,7 +577,7 @@ KStore::OnodeRef KStore::Collection::get_onode(
     if (!oid.match(cnode.bits, pgid.ps())) {
       derr << __func__ << " oid " << oid << " not part of " << pgid
 	   << " bits " << cnode.bits << dendl;
-      assert(0);
+      ceph_abort();
     }
   }
 
@@ -1402,7 +1402,7 @@ int KStore::collection_empty(const coll_t& cid, bool *empty)
 }
 
 int KStore::collection_list(
-  const coll_t& cid, ghobject_t start, ghobject_t end,
+  const coll_t& cid, const ghobject_t& start, const ghobject_t& end,
   bool sort_bitwise, int max,
   vector<ghobject_t> *ls, ghobject_t *pnext)
 {
@@ -1413,7 +1413,7 @@ int KStore::collection_list(
 }
 
 int KStore::collection_list(
-  CollectionHandle &c_, ghobject_t start, ghobject_t end,
+  CollectionHandle &c_, const ghobject_t& start, const ghobject_t& end,
   bool sort_bitwise, int max,
   vector<ghobject_t> *ls, ghobject_t *pnext)
 
@@ -1435,7 +1435,7 @@ int KStore::collection_list(
 }
 
 int KStore::_collection_list(
-  Collection* c, ghobject_t start, ghobject_t end,
+  Collection* c, const ghobject_t& start, const ghobject_t& end,
   bool sort_bitwise, int max,
   vector<ghobject_t> *ls, ghobject_t *pnext)
 {
@@ -2480,7 +2480,7 @@ void KStore::_txc_add_transaction(TransContext *txc, Transaction *t)
 
     default:
       derr << "bad op " << op->op << dendl;
-      assert(0);
+      ceph_abort();
     }
 
   endop:

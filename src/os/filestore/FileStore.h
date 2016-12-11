@@ -382,7 +382,7 @@ private:
       return true;
     }
     void _dequeue(OpSequencer *o) {
-      assert(0);
+      ceph_abort();
     }
     bool _empty() {
       return store->op_queue.empty();
@@ -648,7 +648,8 @@ public:
 
   // collections
   using ObjectStore::collection_list;
-  int collection_list(const coll_t& c, ghobject_t start, ghobject_t end,
+  int collection_list(const coll_t& c,
+		      const ghobject_t& start, const ghobject_t& end,
 		      bool sort_bitwise, int max,
 		      vector<ghobject_t> *ls, ghobject_t *next);
   int list_collections(vector<coll_t>& ls);

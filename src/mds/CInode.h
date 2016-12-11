@@ -218,6 +218,7 @@ public:
   static const int STATE_DIRTYPOOL =   (1<<18);
   static const int STATE_REPAIRSTATS = (1<<19);
   static const int STATE_MISSINGOBJS = (1<<20);
+  static const int STATE_EVALSTALECAPS = (1<<21);
   // orphan inode needs notification of releasing reference
   static const int STATE_ORPHAN =	STATE_NOTIFYREF;
 
@@ -739,9 +740,9 @@ public:
 
   // -- misc -- 
   bool is_projected_ancestor_of(CInode *other);
-  void make_path_string(std::string& s, CDentry *use_parent=NULL) const;
-  void make_path_string_projected(std::string& s) const;
-  void make_path(filepath& s) const;
+
+  void make_path_string(std::string& s, bool projected=false, const CDentry *use_parent=NULL) const;
+  void make_path(filepath& s, bool projected=false) const;
   void name_stray_dentry(std::string& dname);
   
   // -- dirtyness --

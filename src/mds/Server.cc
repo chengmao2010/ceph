@@ -390,7 +390,7 @@ void Server::handle_client_session(MClientSession *m)
     break;
 
   default:
-    assert(0);
+    ceph_abort();
   }
   m->put();
 }
@@ -492,10 +492,10 @@ void Server::_session_logged(Session *session, uint64_t state_seq, bool open, ve
       }
       mds->sessionmap.remove_session(session);
     } else {
-      assert(0);
+      ceph_abort();
     }
   } else {
-    assert(0);
+    ceph_abort();
   }
 }
 
@@ -1119,6 +1119,8 @@ void Server::reply_client_request(MDRequestRef& mdr, MClientReply *reply)
 
   mdr->mark_event("replying");
 
+  Session *session = mdr->session;
+
   // note successful request in session map?
   //
   // setfilelock requests are special, they only modify states in MDS memory.
@@ -1126,16 +1128,16 @@ void Server::reply_client_request(MDRequestRef& mdr, MClientReply *reply)
   // setfilelock request, it means that client did not receive corresponding
   // setfilelock reply.  So MDS should re-execute the setfilelock request.
   if (req->may_write() && req->get_op() != CEPH_MDS_OP_SETFILELOCK &&
-      reply->get_result() == 0 && mdr->session) {
+      reply->get_result() == 0 && session) {
     inodeno_t created = mdr->alloc_ino ? mdr->alloc_ino : mdr->used_prealloc_ino;
-    mdr->session->add_completed_request(mdr->reqid.tid, created);
+    session->add_completed_request(mdr->reqid.tid, created);
     if (mdr->ls) {
-      mdr->ls->touched_sessions.insert(mdr->session->info.inst.name);
+      mdr->ls->touched_sessions.insert(session->info.inst.name);
     }
   }
 
   // give any preallocated inos to the session
-  apply_allocated_inos(mdr);
+  apply_allocated_inos(mdr, session);
 
   // get tracei/tracedn from mdr?
   snapid_t snapid = mdr->snapid;
@@ -1144,7 +1146,6 @@ void Server::reply_client_request(MDRequestRef& mdr, MClientReply *reply)
 
   bool is_replay = mdr->client_request->is_replay();
   bool did_early_reply = mdr->did_early_reply;
-  Session *session = mdr->session;
   entity_inst_t client_inst = req->get_source_inst();
   int dentry_wanted = req->get_dentry_wanted();
 
@@ -1161,14 +1162,11 @@ void Server::reply_client_request(MDRequestRef& mdr, MClientReply *reply)
       mdr->cap_releases.erase(tracedn->get_dir()->get_inode()->vino());
   }
 
-  // note client connection to direct my reply
-  ConnectionRef client_con = req->get_connection();
-
   // drop non-rdlocks before replying, so that we can issue leases
   mdcache->request_drop_non_rdlocks(mdr);
 
   // reply at all?
-  if (client_inst.name.is_mds()) {
+  if (client_inst.name.is_mds() || !session) {
     reply->put();   // mds doesn't need a reply
     reply = 0;
   } else {
@@ -1191,7 +1189,7 @@ void Server::reply_client_request(MDRequestRef& mdr, MClientReply *reply)
     reply->set_extra_bl(mdr->reply_extra_bl);
 
     reply->set_mdsmap_epoch(mds->mdsmap->get_epoch());
-    client_con->send_message(reply);
+    req->get_connection()->send_message(reply);
   }
 
   const bool completed = mdr->has_completed;
@@ -1469,14 +1467,19 @@ void Server::handle_osd_map()
 
 void Server::dispatch_client_request(MDRequestRef& mdr)
 {
+  // we shouldn't be waiting on anyone.
+  assert(!mdr->has_more() || mdr->more()->waiting_on_slave.empty());
+
+  if (mdr->killed) {
+    dout(10) << "request " << *mdr << " was killed" << dendl;
+    return;
+  }
+
   MClientRequest *req = mdr->client_request;
 
   if (logger) logger->inc(l_mdss_dispatch_client_request);
 
   dout(7) << "dispatch_client_request " << *req << dendl;
-
-  // we shouldn't be waiting on anyone.
-  assert(!mdr->has_more() || mdr->more()->waiting_on_slave.empty());
 
   if (req->may_write()) {
     if (mdcache->is_readonly()) {
@@ -1677,6 +1680,17 @@ void Server::handle_slave_request(MMDSSlaveRequest *m)
       m->put();
       return;
     }
+
+    if (m->get_op() == MMDSSlaveRequest::OP_FINISH && m->is_abort()) {
+      mdr->aborted = true;
+      if (mdr->slave_request) {
+	// only abort on-going xlock, wrlock and auth pin
+	assert(!mdr->slave_did_prepare());
+      } else {
+	mdcache->request_finish(mdr);
+      }
+      return;
+    }
   }
   if (!mdr.get()) {
     // new?
@@ -1802,7 +1816,7 @@ void Server::handle_slave_request_reply(MMDSSlaveRequest *m)
     break;
 
   default:
-    assert(0);
+    ceph_abort();
   }
   
   // done with reply.
@@ -1833,7 +1847,7 @@ void Server::dispatch_slave_request(MDRequestRef& mdr)
 
       if (!lock) {
 	dout(10) << "don't have object, dropping" << dendl;
-	assert(0); // can this happen, if we auth pinned properly.
+	ceph_abort(); // can this happen, if we auth pinned properly.
       }
       if (op == MMDSSlaveRequest::OP_XLOCK && !lock->get_parent()->is_auth()) {
 	dout(10) << "not auth for remote xlock attempt, dropping on " 
@@ -1928,7 +1942,7 @@ void Server::dispatch_slave_request(MDRequestRef& mdr)
     break;
 
   default: 
-    assert(0);
+    ceph_abort();
   }
 }
 
@@ -1996,7 +2010,7 @@ void Server::handle_slave_auth_pin(MDRequestRef& mdr)
 	} else if (CDentry *dn = dynamic_cast<CDentry*>(*p)) {
 	  dir = dn->get_dir();
 	} else {
-	  assert(0);
+	  ceph_abort();
 	}
 	if (dir) {
 	  if (dir->is_freezing_dir())
@@ -2309,7 +2323,7 @@ CInode* Server::prepare_new_inode(MDRequestRef& mdr, CDir *dir, inodeno_t useino
     mds->clog->error() << mdr->client_request->get_source()
        << " specified ino " << useino
        << " but mds." << mds->get_nodeid() << " allocated " << in->inode.ino << "\n";
-    //assert(0); // just for now.
+    //ceph_abort(); // just for now.
   }
     
   int got = g_conf->mds_client_prealloc_inos - mdr->session->get_num_projected_prealloc_inos();
@@ -2395,9 +2409,8 @@ void Server::journal_allocated_inos(MDRequestRef& mdr, EMetaBlob *blob)
 		      mds->inotable->get_projected_version());
 }
 
-void Server::apply_allocated_inos(MDRequestRef& mdr)
+void Server::apply_allocated_inos(MDRequestRef& mdr, Session *session)
 {
-  Session *session = mdr->session;
   dout(10) << "apply_allocated_inos " << mdr->alloc_ino
 	   << " / " << mdr->prealloc_inos
 	   << " / " << mdr->used_prealloc_ino << dendl;
@@ -3285,6 +3298,11 @@ void Server::handle_client_openc(MDRequestRef& mdr)
   }
 
   journal_and_reply(mdr, in, dn, le, fin);
+
+  // We hit_dir (via hit_inode) in our finish callback, but by then we might
+  // have overshot the split size (multiple opencs in flight), so here is
+  // an early chance to split the dir if this openc makes it oversized.
+  mds->balancer->maybe_fragment(dir, false);
 }
 
 
@@ -4784,6 +4802,7 @@ void Server::handle_client_mkdir(MDRequestRef& mdr)
 
   // ...and that new dir is empty.
   CDir *newdir = newi->get_or_open_dirfrag(mdcache, frag_t());
+  newdir->state_set(CDir::STATE_CREATING);
   newdir->mark_complete();
   newdir->fnode.version = newdir->pre_dirty();
 
@@ -5175,7 +5194,7 @@ void Server::handle_slave_link_prep(MDRequestRef& mdr)
 
   mdr->auth_pin(targeti);
 
-  //assert(0);  // test hack: make sure master can handle a slave that fails to prepare...
+  //ceph_abort();  // test hack: make sure master can handle a slave that fails to prepare...
   assert(g_conf->mds_kill_link_at != 5);
 
   // journal it
@@ -5529,7 +5548,14 @@ void Server::handle_client_unlink(MDRequestRef& mdr)
   if (in->is_dir() && in->has_subtree_root_dirfrag()) {
     // subtree root auths need to be witnesses
     set<mds_rank_t> witnesses;
-    in->list_replicas(witnesses);
+
+    list<CDir*> dfls;
+    in->get_subtree_dirfrags(dfls);
+    for (auto p : dfls) {
+      if (mds->get_nodeid() != p->get_dir_auth().first)
+	witnesses.insert(p->get_dir_auth().first);
+    }
+
     dout(10) << " witnesses " << witnesses << ", have " << mdr->more()->witnessed << dendl;
 
     for (set<mds_rank_t>::iterator p = witnesses.begin();
@@ -6602,13 +6628,11 @@ version_t Server::_rename_prepare_import(MDRequestRef& mdr, CDentry *srcdn, buff
            mds->mdsmap->get_up_features());
   prepare_force_open_sessions(mdr->more()->imported_client_map, mdr->more()->sseq_map);
 
-  list<ScatterLock*> updated_scatterlocks;  // we clear_updated explicitly below
+  list<ScatterLock*> updated_scatterlocks;
   mdcache->migrator->decode_import_inode(srcdn, blp, 
 					 srcdn->authority().first,
 					 mdr->ls, 0,
 					 mdr->more()->cap_imports, updated_scatterlocks);
-  srcdnl->get_inode()->filelock.remove_dirty();  
-  srcdnl->get_inode()->nestlock.remove_dirty();  
 
   // hack: force back to !auth and clean, temporarily
   srcdnl->get_inode()->state_clear(CInode::STATE_AUTH);

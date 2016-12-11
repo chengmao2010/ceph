@@ -1838,7 +1838,7 @@ struct C_Objecter_GetVersion : public Context {
       objecter->wait_for_latest_osdmap(fin);
     } else {
       // it doesn't return any other error codes!
-      assert(0);
+      ceph_abort();
     }
   }
 };
@@ -2296,26 +2296,38 @@ void Objecter::_op_submit(Op *op, shunique_lock& sul, ceph_tid_t *ptid)
   assert(op->session == NULL);
   OSDSession *s = NULL;
 
-  bool const check_for_latest_map = _calc_target(&op->target,
-						 &op->last_force_resend)
+  bool check_for_latest_map = _calc_target(&op->target, &op->last_force_resend)
     == RECALC_OP_TARGET_POOL_DNE;
 
   // Try to get a session, including a retry if we need to take write lock
   int r = _get_session(op->target.osd, &s, sul);
+  if (r == -EAGAIN ||
+      (check_for_latest_map && sul.owns_lock_shared())) {
+    epoch_t orig_epoch = osdmap->get_epoch();
+    sul.unlock();
+    if (cct->_conf->objecter_debug_inject_relock_delay) {
+      sleep(1);
+    }
+    sul.lock();
+    if (orig_epoch != osdmap->get_epoch()) {
+      // map changed; recalculate mapping
+      ldout(cct, 10) << __func__ << " relock raced with osdmap, recalc target"
+		     << dendl;
+      check_for_latest_map = _calc_target(&op->target, &op->last_force_resend)
+	== RECALC_OP_TARGET_POOL_DNE;
+      if (s) {
+	put_session(s);
+	s = NULL;
+	r = -EAGAIN;
+      }
+    }
+  }
   if (r == -EAGAIN) {
     assert(s == NULL);
-    sul.unlock();
-    sul.lock();
     r = _get_session(op->target.osd, &s, sul);
   }
   assert(r == 0);
   assert(s);  // may be homeless
-
-  // We may need to take wlock if we will need to _set_op_map_check later.
-  if (check_for_latest_map && sul.owns_lock_shared()) {
-    sul.unlock();
-    sul.lock();
-  }
 
   _send_op_account(op);
 
@@ -3839,7 +3851,7 @@ int Objecter::create_pool(string& name, Context *onfinish, uint64_t auid,
   unique_lock wl(rwlock);
   ldout(cct, 10) << "create_pool name=" << name << dendl;
 
-  if (osdmap->lookup_pg_pool_name(name.c_str()) >= 0)
+  if (osdmap->lookup_pg_pool_name(name) >= 0)
     return -EEXIST;
 
   PoolOp *op = new PoolOp;

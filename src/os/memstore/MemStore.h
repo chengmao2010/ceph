@@ -45,6 +45,7 @@ public:
     friend void intrusive_ptr_add_ref(Object *o) { o->get(); }
     friend void intrusive_ptr_release(Object *o) { o->put(); }
 
+    Object() : RefCountedObject(nullptr, 0) {}
     // interface for object data
     virtual size_t get_size() const = 0;
     virtual int read(uint64_t offset, uint64_t len, bufferlist &bl) = 0;
@@ -325,7 +326,8 @@ public:
   bool collection_exists(const coll_t& c) override;
   int collection_empty(const coll_t& c, bool *empty) override;
   using ObjectStore::collection_list;
-  int collection_list(const coll_t& cid, ghobject_t start, ghobject_t end,
+  int collection_list(const coll_t& cid,
+		      const ghobject_t& start, const ghobject_t& end,
 		      bool sort_bitwise, int max,
 		      vector<ghobject_t> *ls, ghobject_t *next) override;
 

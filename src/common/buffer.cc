@@ -349,14 +349,7 @@ static simple_spinlock_t buffer_debug_lock = SIMPLE_SPINLOCK_INITIALIZER;
     raw_posix_aligned(unsigned l, unsigned _align) : raw(l) {
       align = _align;
       assert((align >= sizeof(void *)) && (align & (align - 1)) == 0);
-#ifdef DARWIN
-      data = (char *) valloc (len);
-#else
-      data = 0;
-      int r = ::posix_memalign((void**)(void*)&data, align, len);
-      if (r)
-	throw bad_alloc();
-#endif /* DARWIN */
+      data = mempool::buffer_data::alloc_char.allocate_aligned(len, align);
       if (!data)
 	throw bad_alloc();
       inc_total_alloc(len);
@@ -364,7 +357,7 @@ static simple_spinlock_t buffer_debug_lock = SIMPLE_SPINLOCK_INITIALIZER;
       bdout << "raw_posix_aligned " << this << " alloc " << (void *)data << " l=" << l << ", align=" << align << " total_alloc=" << buffer::get_total_alloc() << bendl;
     }
     ~raw_posix_aligned() {
-      ::free((void*)data);
+      mempool::buffer_data::alloc_char.deallocate_aligned(data, len);
       dec_total_alloc(len);
       bdout << "raw_posix_aligned " << this << " free " << (void *)data << " " << buffer::get_total_alloc() << bendl;
     }
@@ -781,20 +774,6 @@ static simple_spinlock_t buffer_debug_lock = SIMPLE_SPINLOCK_INITIALIZER;
     return new raw_unshareable(len);
   }
 
-  class dummy_raw : public buffer::raw {
-  public:
-    dummy_raw()
-      : raw(UINT_MAX)
-    {}
-    virtual raw* clone_empty() override {
-      return new dummy_raw();
-    }
-  };
-
-  buffer::raw* buffer::create_dummy() {
-    return new dummy_raw();
-  }
-
   buffer::ptr::ptr(raw *r) : _raw(r), _off(0), _len(r->len)   // no lock needed; this is an unref raw.
   {
     r->nref.inc();
@@ -1096,7 +1075,7 @@ static simple_spinlock_t buffer_debug_lock = SIMPLE_SPINLOCK_INITIALIZER;
     : iterator_impl<is_const>(i.bl, i.off, i.p, i.p_off) {}
 
   template<bool is_const>
-  void buffer::list::iterator_impl<is_const>::advance(ssize_t o)
+  void buffer::list::iterator_impl<is_const>::advance(int o)
   {
     //cout << this << " advance " << o << " from " << off << " (p_off " << p_off << " in " << p->length() << ")" << std::endl;
     if (o > 0) {
@@ -1135,7 +1114,7 @@ static simple_spinlock_t buffer_debug_lock = SIMPLE_SPINLOCK_INITIALIZER;
   }
 
   template<bool is_const>
-  void buffer::list::iterator_impl<is_const>::seek(size_t o)
+  void buffer::list::iterator_impl<is_const>::seek(unsigned o)
   {
     p = ls->begin();
     off = p_off = 0;
@@ -1187,6 +1166,12 @@ static simple_spinlock_t buffer_debug_lock = SIMPLE_SPINLOCK_INITIALIZER;
       len -= howmuch;
       advance(howmuch);
     }
+  }
+
+  template<bool is_const>
+  void buffer::list::iterator_impl<is_const>::copy(unsigned len, ptr &dest)
+  {
+    copy_deep(len, dest);
   }
 
   template<bool is_const>
@@ -1327,12 +1312,12 @@ static simple_spinlock_t buffer_debug_lock = SIMPLE_SPINLOCK_INITIALIZER;
     : iterator_impl(l, o, ip, po)
   {}
 
-  void buffer::list::iterator::advance(ssize_t o)
+  void buffer::list::iterator::advance(int o)
   {
     buffer::list::iterator_impl<false>::advance(o);
   }
 
-  void buffer::list::iterator::seek(size_t o)
+  void buffer::list::iterator::seek(unsigned o)
   {
     buffer::list::iterator_impl<false>::seek(o);
   }
@@ -1362,6 +1347,11 @@ static simple_spinlock_t buffer_debug_lock = SIMPLE_SPINLOCK_INITIALIZER;
   void buffer::list::iterator::copy(unsigned len, char *dest)
   {
     return buffer::list::iterator_impl<false>::copy(len, dest);
+  }
+
+  void buffer::list::iterator::copy(unsigned len, ptr &dest)
+  {
+    return buffer::list::iterator_impl<false>::copy_deep(len, dest);
   }
 
   void buffer::list::iterator::copy_deep(unsigned len, ptr &dest)
@@ -1904,7 +1894,7 @@ static simple_spinlock_t buffer_debug_lock = SIMPLE_SPINLOCK_INITIALIZER;
       }
       return (*p)[n];
     }
-    assert(0);
+    ceph_abort();
   }
 
   /*

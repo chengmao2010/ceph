@@ -94,9 +94,8 @@ enum {
   l_bluestore_write_small_new,
   l_bluestore_txc,
   l_bluestore_onode_reshard,
-  l_bluestore_gc,
-  l_bluestore_gc_bytes,
   l_bluestore_blob_split,
+  l_bluestore_extent_compress,
   l_bluestore_last
 };
 
@@ -340,7 +339,8 @@ public:
 
     BufferSpace bc;             ///< buffer cache
 
-    SharedBlob(uint64_t i, const string& k, Cache *c);
+    SharedBlob(Cache *c) : bc(c) {}
+    SharedBlob(uint64_t i, Cache *c);
     ~SharedBlob();
 
     friend void intrusive_ptr_add_ref(SharedBlob *b) { b->get(); }
@@ -609,7 +609,7 @@ public:
       return blob_start() + blob->get_blob().get_logical_length();
     }
 
-    uint32_t end() const {
+    uint32_t logical_end() const {
       return logical_offset + length;
     }
 
@@ -786,7 +786,6 @@ public:
     ghobject_t oid;
     string key;     ///< key under PREFIX_OBJ where we are stored
 
-    OnodeSpace *space;    ///< containing OnodeSpace
     boost::intrusive::list_member_hook<> lru_item;
 
     bluestore_onode_t onode;  ///< metadata stored as value in kv store
@@ -798,12 +797,11 @@ public:
     std::condition_variable flush_cond;   ///< wait here for unapplied txns
     set<TransContext*> flush_txns;   ///< committing or wal txns
 
-    Onode(OnodeSpace *s, Collection *c, const ghobject_t& o, const string& k)
+    Onode(Collection *c, const ghobject_t& o, const string& k)
       : nref(0),
 	c(c),
 	oid(o),
 	key(k),
-	space(s),
 	exists(false),
 	extent_map(this) {
     }
@@ -1117,7 +1115,7 @@ public:
 
     BlobRef new_blob() {
       BlobRef b = new Blob;
-      b->shared_blob = new SharedBlob(0, string(), cache);
+      b->shared_blob = new SharedBlob(cache);
       return b;
     }
 
@@ -1169,8 +1167,8 @@ public:
       STATE_PREPARE,
       STATE_AIO_WAIT,
       STATE_IO_DONE,
-      STATE_KV_QUEUED,
-      STATE_KV_COMMITTING,
+      STATE_KV_QUEUED,     // queued for kv_sync_thread submission
+      STATE_KV_SUBMITTED,  // submitted to kv; not yet synced
       STATE_KV_DONE,
       STATE_WAL_QUEUED,
       STATE_WAL_APPLYING,
@@ -1189,7 +1187,7 @@ public:
       case STATE_AIO_WAIT: return "aio_wait";
       case STATE_IO_DONE: return "io_done";
       case STATE_KV_QUEUED: return "kv_queued";
-      case STATE_KV_COMMITTING: return "kv_committing";
+      case STATE_KV_SUBMITTED: return "kv_submitted";
       case STATE_KV_DONE: return "kv_done";
       case STATE_WAL_QUEUED: return "wal_queued";
       case STATE_WAL_APPLYING: return "wal_applying";
@@ -1228,8 +1226,6 @@ public:
 
     boost::intrusive::list_member_hook<> wal_queue_item;
     bluestore_wal_transaction_t *wal_txn; ///< wal transaction (if any)
-
-    bool kv_submitted = false; ///< true when we've been submitted to kv db
 
     interval_set<uint64_t> allocated, released;
     struct volatile_statfs{
@@ -1285,6 +1281,7 @@ public:
 
 
     IOContext ioc;
+    bool had_ios = false;  ///< true if we submitted IOs before our kv txn
 
     CollectionRef first_collection;  ///< first referenced collection
 
@@ -1347,6 +1344,8 @@ public:
     std::mutex wal_apply_mutex;
 
     uint64_t last_seq = 0;
+
+    std::atomic_int txc_with_unstable_io = {0};  ///< num txcs with unstable io
 
     std::atomic_int kv_committing_serially = {0};
 
@@ -1541,15 +1540,15 @@ private:
 
   std::atomic<int> csum_type;
 
-  uint64_t block_size;     ///< block size of block device (power of 2)
-  uint64_t block_mask;     ///< mask to get just the block offset
-  size_t block_size_order; ///< bits to shift to get block size
+  uint64_t block_size = 0;     ///< block size of block device (power of 2)
+  uint64_t block_mask = 0;     ///< mask to get just the block offset
+  size_t block_size_order = 0; ///< bits to shift to get block size
 
   uint64_t min_alloc_size = 0; ///< minimum allocation unit (power of 2)
-  uint64_t min_min_alloc_size = 0; /// < minimum seen min_alloc_size
+  uint64_t min_min_alloc_size = 0; ///< minimum seen min_alloc_size
   size_t min_alloc_size_order = 0; ///< bits for min_alloc_size
 
-  uint64_t max_alloc_size; ///< maximum allocation unit (power of 2)
+  uint64_t max_alloc_size = 0; ///< maximum allocation unit (power of 2)
 
   bool sync_wal_apply;	  ///< see config option bluestore_sync_wal_apply
 
@@ -1655,13 +1654,14 @@ private:
   void _txc_write_nodes(TransContext *txc, KeyValueDB::Transaction t);
   void _txc_state_proc(TransContext *txc);
   void _txc_aio_submit(TransContext *txc);
-  void _txc_finalize_kv(TransContext *txc, KeyValueDB::Transaction t);
 public:
   void _txc_aio_finish(void *p) {
     _txc_state_proc(static_cast<TransContext*>(p));
   }
 private:
   void _txc_finish_io(TransContext *txc);
+  void _txc_finalize_kv(TransContext *txc, KeyValueDB::Transaction t);
+  void _txc_release_alloc(TransContext *txc);
   void _txc_finish_kv(TransContext *txc);
   void _txc_finish(TransContext *txc);
 
@@ -1675,7 +1675,10 @@ private:
       kv_cond.notify_all();
     }
     kv_sync_thread.join();
-    kv_stop = false;
+    {
+      std::lock_guard<std::mutex> l(kv_lock);
+      kv_stop = false;
+    }
   }
 
   bluestore_wal_op_t *_get_wal_op(TransContext *txc, OnodeRef o);
@@ -1701,7 +1704,8 @@ private:
     txc->shared_blobs_written.insert(b->shared_blob);
   }
 
-  int _collection_list(Collection *c, ghobject_t start, ghobject_t end,
+  int _collection_list(
+    Collection *c, const ghobject_t& start, const ghobject_t& end,
     bool sort_bitwise, int max, vector<ghobject_t> *ls, ghobject_t *next);
 
   template <typename T, typename F>
@@ -1748,6 +1752,8 @@ public:
   int mkjournal() override {
     return 0;
   }
+
+  void get_db_statistics(Formatter *f);
 
 public:
   int statfs(struct store_statfs_t *buf) override;
@@ -1814,10 +1820,14 @@ public:
   int collection_empty(const coll_t& c, bool *empty) override;
   int collection_bits(const coll_t& c) override;
 
-  int collection_list(const coll_t& cid, ghobject_t start, ghobject_t end,
+  int collection_list(const coll_t& cid,
+		      const ghobject_t& start,
+		      const ghobject_t& end,
 		      bool sort_bitwise, int max,
 		      vector<ghobject_t> *ls, ghobject_t *next) override;
-  int collection_list(CollectionHandle &c, ghobject_t start, ghobject_t end,
+  int collection_list(CollectionHandle &c,
+		      const ghobject_t& start,
+		      const ghobject_t& end,
 		      bool sort_bitwise, int max,
 		      vector<ghobject_t> *ls, ghobject_t *next) override;
 

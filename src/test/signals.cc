@@ -3,7 +3,7 @@
 #include "global/signal_handler.h"
 #include "common/debug.h"
 
-#include "test/unit.h"
+#include "gtest/gtest.h"
 
 #include <errno.h>
 #include <signal.h>
@@ -118,6 +118,7 @@ TEST(SignalHandler, LogInternal)
 {
   g_ceph_context->_log->inject_segv();
   ASSERT_DEATH(derr << "foo" << dendl, ".*");
+  g_ceph_context->_log->reset_segv();
 }
 
 

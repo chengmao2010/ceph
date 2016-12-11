@@ -18,10 +18,15 @@
  * of the interfaces defined in BitMapArea.
  */
 
-#include "common/dout.h"
 #include "BitAllocator.h"
 #include <assert.h>
+#include "bluestore_types.h"
+#include "common/debug.h"
 #include <math.h>
+
+#define dout_subsys ceph_subsys_bluestore
+#undef dout_prefix
+#define dout_prefix *_dout << "bitalloc:"
 
 MEMPOOL_DEFINE_OBJECT_FACTORY(BitMapArea, BitMapArea, bluestore_alloc);
 MEMPOOL_DEFINE_OBJECT_FACTORY(BitMapAreaIN, BitMapAreaIN, bluestore_alloc);
@@ -340,6 +345,11 @@ int BmapEntry::find_any_free_bits(int start_offset, int64_t num_blocks,
   return allocated;
 }
 
+void BmapEntry::dump_state(int& count)
+{
+  dout(0) << count << ":: 0x" << std::hex << m_bits << dendl;
+}
+
 /*
  * Zone related functions.
  */
@@ -379,18 +389,18 @@ int64_t BitMapZone::get_used_blocks()
 
 bool BitMapZone::reserve_blocks(int64_t num_blocks)
 {
-  alloc_assert(0);
+  ceph_abort();
   return false;
 }
 
 void BitMapZone::unreserve(int64_t num_blocks, int64_t allocated)
 {
-  alloc_assert(0);
+  ceph_abort();
 }
 
 int64_t BitMapZone::get_reserved_blocks()
 {
-  alloc_assert(0);
+  ceph_abort();
   return 0;
 }
 
@@ -630,6 +640,22 @@ int64_t BitMapZone::alloc_blocks_dis(int64_t num_blocks,
 
   return allocated;
 }
+
+void BitMapZone::dump_state(int& count)
+{
+  BmapEntry *bmap = NULL;
+  int bmap_idx = 0;
+  BitMapEntityIter <BmapEntry> iter = BitMapEntityIter<BmapEntry>(
+          m_bmap_list, 0);
+  dout(0) << __func__ << " zone " << count << " dump start " << dendl;
+  while ((bmap = (BmapEntry *) iter.next())) {
+    bmap->dump_state(bmap_idx);
+    bmap_idx++;
+  }
+  dout(0) << __func__ << " zone " << count << " dump end " << dendl;
+  count++;
+}
+
 
 /*
  * BitMapArea Leaf and non-Leaf functions.
@@ -1060,6 +1086,18 @@ void BitMapAreaIN::free_blocks(int64_t start_block, int64_t num_blocks)
   unlock();
 }
 
+void BitMapAreaIN::dump_state(int& count)
+{
+  BitMapArea *child = NULL;
+
+  BmapEntityListIter iter = BmapEntityListIter(
+        m_child_list, 0, false);
+
+  while ((child = (BitMapArea *) iter.next())) {
+    child->dump_state(count);
+  }
+}
+
 /*
  * BitMapArea Leaf
  */
@@ -1264,16 +1302,16 @@ void BitAllocator::init_check(int64_t total_blocks, int64_t zone_size_block,
   int64_t unaligned_blocks = 0;
 
   if (mode != SERIAL && mode != CONCURRENT) {
-    alloc_assert(0);
+    ceph_abort();
   }
 
   if (total_blocks <= 0) {
-    alloc_assert(0);
+    ceph_abort();
   }
 
   if (zone_size_block == 0 ||
     zone_size_block < BmapEntry::size()) {
-    alloc_assert(0);
+    ceph_abort();
   }
 
   zone_size_block = (zone_size_block / BmapEntry::size()) *
@@ -1462,7 +1500,7 @@ int64_t BitAllocator::alloc_blocks(int64_t num_blocks, int64_t hint, int64_t *st
 
   *start_block = 0;
   if (!check_input(num_blocks)) {
-    alloc_assert(0);
+    ceph_abort();
     return 0;
   }
 
@@ -1668,4 +1706,12 @@ void BitAllocator::free_blocks_dis(int64_t num_blocks, ExtentList *block_list)
   sub_used_blocks(num_blocks);
   alloc_assert(get_used_blocks() >= 0);
   unlock();
+}
+
+void BitAllocator::dump()
+{
+  int count = 0;
+  serial_lock(); 
+  dump_state(count);
+  serial_unlock(); 
 }

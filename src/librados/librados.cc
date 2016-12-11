@@ -445,14 +445,6 @@ void librados::ObjectWriteOperation::setxattr(const char *name, const bufferlist
   o->setxattr(name, v);
 }
 
-void librados::ObjectWriteOperation::setxattr(const char *name,
-					      const buffer::list&& v)
-{
-  ::ObjectOperation *o = &impl->o;
-  o->setxattr(name, std::move(v));
-}
-
-
 void librados::ObjectWriteOperation::omap_set(
   const map<string, bufferlist> &map)
 {
@@ -1439,6 +1431,8 @@ static int translate_flags(int flags)
     op_flags |= CEPH_OSD_FLAG_IGNORE_OVERLAY;
   if (flags & librados::OPERATION_FULL_TRY)
     op_flags |= CEPH_OSD_FLAG_FULL_TRY;
+  if (flags & librados::OPERATION_FULL_FORCE)
+    op_flags |= CEPH_OSD_FLAG_FULL_FORCE;
 
   return op_flags;
 }
@@ -2413,6 +2407,7 @@ int librados::Rados::ioctx_create(const char *name, IoCtx &io)
   int ret = rados_ioctx_create((rados_t)client, name, &p);
   if (ret)
     return ret;
+  io.close();
   io.io_ctx_impl = (IoCtxImpl*)p;
   return 0;
 }
@@ -2423,6 +2418,7 @@ int librados::Rados::ioctx_create2(int64_t pool_id, IoCtx &io)
   int ret = rados_ioctx_create2((rados_t)client, pool_id, &p);
   if (ret)
     return ret;
+  io.close();
   io.io_ctx_impl = (IoCtxImpl*)p;
   return 0;
 }

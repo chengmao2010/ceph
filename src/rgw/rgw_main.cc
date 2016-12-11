@@ -175,9 +175,6 @@ static RGWRESTMgr *set_logging(RGWRESTMgr *mgr)
   return mgr;
 }
 
-void intrusive_ptr_add_ref(CephContext* cct) { cct->get(); }
-void intrusive_ptr_release(CephContext* cct) { cct->put(); }
-
 RGWRealmReloader *preloader = NULL;
 
 static void reloader_handler(int signum)
@@ -261,14 +258,35 @@ int main(int argc, const char **argv)
   // Now that we've determined which frontend(s) to use, continue with global
   // initialization. Passing false as the final argument ensures that
   // global_pre_init() is not invoked twice.
-  global_init(&def_args, args, CEPH_ENTITY_TYPE_CLIENT, CODE_ENVIRONMENT_DAEMON,
-          flags, "rgw_data", false);
+  // claim the reference and release it after subsequent destructors have fired
+  auto cct = global_init(&def_args, args, CEPH_ENTITY_TYPE_CLIENT,
+			 CODE_ENVIRONMENT_DAEMON,
+			 flags, "rgw_data", false);
 
   for (std::vector<const char*>::iterator i = args.begin(); i != args.end(); ++i) {
     if (ceph_argparse_flag(args, i, "-h", "--help", (char*)NULL)) {
       usage();
       return 0;
     }
+  }
+
+  // maintain existing region root pool for new multisite objects
+  if (!g_conf->rgw_region_root_pool.empty()) {
+    const char *root_pool = g_conf->rgw_region_root_pool.c_str();
+    if (g_conf->rgw_zonegroup_root_pool.empty()) {
+      g_conf->set_val_or_die("rgw_zonegroup_root_pool", root_pool);
+    }
+    if (g_conf->rgw_period_root_pool.empty()) {
+      g_conf->set_val_or_die("rgw_period_root_pool", root_pool);
+    }
+    if (g_conf->rgw_realm_root_pool.empty()) {
+      g_conf->set_val_or_die("rgw_realm_root_pool", root_pool);
+    }
+  }
+
+  // for region -> zonegroup conversion (must happen before common_init_finish())
+  if (!g_conf->rgw_region.empty() && g_conf->rgw_zonegroup.empty()) {
+    g_conf->set_val_or_die("rgw_zonegroup", g_conf->rgw_region.c_str());
   }
 
   check_curl();
@@ -287,9 +305,6 @@ int main(int argc, const char **argv)
   g_ceph_context->enable_perf_counter();
 
   common_init_finish(g_ceph_context);
-
-  // claim the reference and release it after subsequent destructors have fired
-  boost::intrusive_ptr<CephContext> cct(g_ceph_context, false);
 
   int r = rgw_tools_init(g_ceph_context);
   if (r < 0) {

@@ -1654,6 +1654,17 @@ int RGWZoneParams::set_as_default(bool exclusive)
   return RGWSystemMetaObj::set_as_default(exclusive);
 }
 
+const string& RGWZoneParams::get_compression_type(const string& placement_rule) const
+{
+  static const std::string NONE{"none"};
+  auto p = placement_pools.find(placement_rule);
+  if (p == placement_pools.end()) {
+    return NONE;
+  }
+  const auto& type = p->second.compression_type;
+  return !type.empty() ? type : NONE;
+}
+
 void RGWPeriodMap::encode(bufferlist& bl) const {
   ENCODE_START(2, 1, bl);
   ::encode(id, bl);
@@ -3057,7 +3068,8 @@ class RGWSyncLogTrimThread : public RGWSyncProcessorThread
   void stop_process() override { crs.stop(); }
 public:
   RGWSyncLogTrimThread(RGWRados *store, int interval)
-    : RGWSyncProcessorThread(store), crs(store->ctx(), nullptr), store(store),
+    : RGWSyncProcessorThread(store),
+      crs(store->ctx(), store->get_cr_registry()), store(store),
       http(store->ctx(), crs.get_completion_mgr()),
       trim_interval(interval, 0)
   {}
@@ -3066,9 +3078,9 @@ public:
     return http.set_threaded();
   }
   int process() override {
-    crs.run(new RGWDataLogTrimCR(store, &http,
-                                 cct->_conf->rgw_data_log_num_shards,
-                                 trim_interval));
+    crs.run(create_data_log_trim_cr(store, &http,
+                                    cct->_conf->rgw_data_log_num_shards,
+                                    trim_interval));
     return 0;
   }
 };
@@ -3334,9 +3346,9 @@ int RGWRados::convert_regionmap()
 {
   RGWZoneGroupMap zonegroupmap;
 
-  string pool_name = cct->_conf->rgw_zone_root_pool;
+  string pool_name = cct->_conf->rgw_region_root_pool;
   if (pool_name.empty()) {
-    pool_name = RGW_DEFAULT_ZONE_ROOT_POOL;
+    pool_name = RGW_DEFAULT_ZONEGROUP_ROOT_POOL;
   }
   string oid = region_map_oid; 
 
@@ -3399,14 +3411,6 @@ int RGWRados::convert_regionmap()
  */
 int RGWRados::replace_region_with_zonegroup()
 {
-  if (!cct->_conf->rgw_region.empty() && cct->_conf->rgw_zonegroup.empty()) {
-    int ret = cct->_conf->set_val("rgw_zonegroup", cct->_conf->rgw_region, true, false);
-    if (ret < 0) {
-      ldout(cct, 0) << "failed to set rgw_zonegroup to " << cct->_conf->rgw_region << dendl;
-      return ret;
-    }
-  }
-
   /* copy default region */
   /* convert default region to default zonegroup */
   string default_oid = cct->_conf->rgw_default_region_info_oid;
@@ -7099,12 +7103,21 @@ int RGWRados::fetch_remote_obj(RGWObjectCtx& obj_ctx,
   }
 
   boost::optional<RGWPutObj_Compress> compressor;
+  CompressorRef plugin;
 
   RGWPutObjDataProcessor *filter = &processor;
-  bool compression_enabled = cct->_conf->rgw_compression_type != "none";
-  if (compression_enabled) {
-    compressor = boost::in_place(cct, filter);
-    filter = &*compressor;
+
+  const auto& compression_type = zone_params.get_compression_type(
+      dest_bucket_info.placement_rule);
+  if (compression_type != "none") {
+    plugin = Compressor::create(cct, compression_type);
+    if (!plugin) {
+      ldout(cct, 1) << "Cannot load plugin for compression type "
+          << compression_type << dendl;
+    } else {
+      compressor = boost::in_place(cct, plugin, filter);
+      filter = &*compressor;
+    }
   }
 
   RGWRadosPutObj cb(cct, filter, &processor, opstate, progress_cb, progress_data);
@@ -7171,10 +7184,10 @@ int RGWRados::fetch_remote_obj(RGWObjectCtx& obj_ctx,
 	}
       }
     }
-    if (compression_enabled && compressor->is_compressed()) {
+    if (compressor && compressor->is_compressed()) {
       bufferlist tmp;
       RGWCompressionInfo cs_info;
-      cs_info.compression_type = cct->_conf->rgw_compression_type;
+      cs_info.compression_type = plugin->get_type_name();
       cs_info.orig_size = cb.get_data_len();
       cs_info.blocks = move(compressor->get_compression_blocks());
       ::encode(cs_info, tmp);
@@ -7849,6 +7862,10 @@ int RGWRados::Object::complete_atomic_modification()
 
   cls_rgw_obj_chain chain;
   store->update_gc_chain(obj, state->manifest, &chain);
+
+  if (chain.empty()) {
+    return 0;
+  }
 
   string tag = state->obj_tag.to_str();
   return store->gc->send_chain(chain, tag, false);  // do it async
@@ -11278,11 +11295,33 @@ int RGWRados::omap_get_vals(rgw_obj& obj, bufferlist& header, const string& mark
  
 }
 
-int RGWRados::omap_get_all(rgw_obj& obj, bufferlist& header, std::map<string, bufferlist>& m)
+int RGWRados::omap_get_all(rgw_obj& obj, bufferlist& header,
+			   std::map<string, bufferlist>& m)
 {
+  rgw_rados_ref ref;
+  rgw_bucket bucket;
+  int r = get_obj_ref(obj, &ref, &bucket);
+  if (r < 0) {
+    return r;
+  }
+
+#define MAX_OMAP_GET_ENTRIES 1024
+  const int count = MAX_OMAP_GET_ENTRIES;
   string start_after;
 
-  return omap_get_vals(obj, header, start_after, (uint64_t)-1, m);
+  while (true) {
+    std::map<string, bufferlist> t;
+    r = ref.ioctx.omap_get_vals(ref.oid, start_after, count, &t);
+    if (r < 0) {
+      return r;
+    }
+    if (t.empty()) {
+      break;
+    }
+    start_after = t.rbegin()->first;
+    m.insert(t.begin(), t.end());
+  }
+  return 0;
 }
 
 int RGWRados::omap_set(rgw_obj& obj, std::string& key, bufferlist& bl)

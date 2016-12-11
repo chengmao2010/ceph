@@ -107,7 +107,7 @@ class C_MDL_WriteError : public MDSIOContextBase {
       mds->clog->error() << "Unhandled journal write error on MDS rank " <<
         mds->get_nodeid() << ": " << cpp_strerror(r) << ", shutting down.";
       mds->damaged();
-      assert(0);  // damaged should never return
+      ceph_abort();  // damaged should never return
     }
   }
 
@@ -297,6 +297,7 @@ void MDLog::_submit_entry(LogEvent *le, MDSLogContextBase *c)
   le->update_segment();
   le->set_stamp(ceph_clock_now(g_ceph_context));
 
+  mdsmap_up_features = mds->mdsmap->get_up_features();
   pending_events[ls->seq].push_back(PendingEvent(le, c));
   num_events++;
 
@@ -376,6 +377,7 @@ void MDLog::_submit_thread()
       continue;
     }
 
+    int64_t features = mdsmap_up_features;
     PendingEvent data = it->second.front();
     it->second.pop_front();
 
@@ -386,7 +388,7 @@ void MDLog::_submit_thread()
       LogSegment *ls = le->_segment;
       // encode it, with event type
       bufferlist bl;
-      le->encode_with_header(bl, mds->mdsmap->get_up_features());
+      le->encode_with_header(bl, features);
 
       uint64_t write_pos = journaler->get_write_pos();
 
@@ -910,7 +912,7 @@ void MDLog::_recovery_thread(MDSInternalContextBase *completion)
       // Oh dear, something unreadable in the store for this rank: require
       // operator intervention.
       mds->damaged();
-      assert(0);  // damaged should not return
+      ceph_abort();  // damaged should not return
   }
 
   // First, read the pointer object.
@@ -927,12 +929,12 @@ void MDLog::_recovery_thread(MDSInternalContextBase *completion)
   } else if (read_result == -EBLACKLISTED) {
     derr << "Blacklisted during JournalPointer read!  Respawning..." << dendl;
     mds->respawn();
-    assert(0); // Should be unreachable because respawn calls execv
+    ceph_abort(); // Should be unreachable because respawn calls execv
   } else if (read_result != 0) {
     mds->clog->error() << "failed to read JournalPointer: " << read_result
                        << " (" << cpp_strerror(read_result) << ")";
     mds->damaged_unlocked();
-    assert(0);  // Should be unreachable because damaged() calls respawn()
+    ceph_abort();  // Should be unreachable because damaged() calls respawn()
   }
 
   // If the back pointer is non-null, that means that a journal
@@ -961,7 +963,7 @@ void MDLog::_recovery_thread(MDSInternalContextBase *completion)
     if (recovery_result == -EBLACKLISTED) {
       derr << "Blacklisted during journal recovery!  Respawning..." << dendl;
       mds->respawn();
-      assert(0); // Should be unreachable because respawn calls execv
+      ceph_abort(); // Should be unreachable because respawn calls execv
     } else if (recovery_result != 0) {
       // Journaler.recover succeeds if no journal objects are present: an error
       // means something worse like a corrupt header, which we can't handle here.
@@ -1008,7 +1010,7 @@ void MDLog::_recovery_thread(MDSInternalContextBase *completion)
   if (recovery_result == -EBLACKLISTED) {
     derr << "Blacklisted during journal recovery!  Respawning..." << dendl;
     mds->respawn();
-    assert(0); // Should be unreachable because respawn calls execv
+    ceph_abort(); // Should be unreachable because respawn calls execv
   } else if (recovery_result != 0) {
     mds->clog->error() << "Error recovering journal " << jp.front << ": "
       << cpp_strerror(recovery_result);
@@ -1279,7 +1281,7 @@ void MDLog::_replay_thread()
         } else {
           mds->clog->error() << "missing journal object";
           mds->damaged_unlocked();
-          assert(0);  // Should be unreachable because damaged() calls respawn()
+          ceph_abort();  // Should be unreachable because damaged() calls respawn()
         }
       } else if (r == -EINVAL) {
         if (journaler->get_read_pos() < journaler->get_expire_pos()) {
@@ -1290,7 +1292,7 @@ void MDLog::_replay_thread()
           } else {
             mds->clog->error() << "invalid journaler offsets";
             mds->damaged_unlocked();
-            assert(0);  // Should be unreachable because damaged() calls respawn()
+            ceph_abort();  // Should be unreachable because damaged() calls respawn()
           }
         } else {
           /* re-read head and check it
@@ -1313,7 +1315,7 @@ void MDLog::_replay_thread()
 
                 mds->clog->error() << "error reading journal header";
                 mds->damaged_unlocked();
-                assert(0);  // Should be unreachable because damaged() calls
+                ceph_abort();  // Should be unreachable because damaged() calls
                             // respawn()
             }
           }
@@ -1357,7 +1359,7 @@ void MDLog::_replay_thread()
         continue;
       } else {
         mds->damaged_unlocked();
-        assert(0);  // Should be unreachable because damaged() calls
+        ceph_abort();  // Should be unreachable because damaged() calls
                     // respawn()
       }
 
@@ -1435,9 +1437,20 @@ void MDLog::standby_trim_segments()
   bool removed_segment = false;
   while (have_any_segments()) {
     LogSegment *seg = get_oldest_segment();
-    if (seg->end > expire_pos)
+    dout(10) << " segment seq=" << seg->seq << " " << seg->offset <<
+      "~" << seg->end - seg->offset << dendl;
+
+    if (seg->end > expire_pos) {
+      dout(10) << " won't remove, not expired!" << dendl;
       break;
-    dout(10) << " removing segment " << seg->seq << "/" << seg->offset << dendl;
+    }
+
+    if (segments.size() == 1) {
+      dout(10) << " won't remove, last segment!" << dendl;
+      break;
+    }
+
+    dout(10) << " removing segment" << dendl;
     mds->mdcache->standby_trim_segment(seg);
     remove_oldest_segment();
     removed_segment = true;
@@ -1446,8 +1459,9 @@ void MDLog::standby_trim_segments()
   if (removed_segment) {
     dout(20) << " calling mdcache->trim!" << dendl;
     mds->mdcache->trim(-1);
-  } else
+  } else {
     dout(20) << " removed no segments!" << dendl;
+  }
 }
 
 void MDLog::dump_replay_status(Formatter *f) const

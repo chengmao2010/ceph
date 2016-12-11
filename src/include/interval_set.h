@@ -356,7 +356,7 @@ class interval_set {
         
         if (p->first + p->second != start) {
           //cout << "p is " << p->first << "~" << p->second << ", start is " << start << ", len is " << len << endl;
-          assert(0);
+          ceph_abort();
         }
         
         p->second += len;               // append to end
@@ -498,6 +498,11 @@ class interval_set {
     interval_set a;
     swap(a);    
     union_of(a, b);
+  }
+  void union_insert(T off, T len) {
+    interval_set a;
+    a.insert(off, len);
+    union_of(a);
   }
 
   bool subset_of(const interval_set &big) const {

@@ -11,6 +11,7 @@
 #include "include/memory.h"
 #include <boost/scoped_ptr.hpp>
 #include "include/encoding.h"
+#include "common/Formatter.h"
 
 using std::string;
 /**
@@ -268,14 +269,6 @@ public:
     return std::make_shared<IteratorImpl>(prefix, get_iterator());
   }
 
-  WholeSpaceIterator get_snapshot_iterator() {
-    return _get_snapshot_iterator();
-  }
-
-  Iterator get_snapshot_iterator(const std::string &prefix) {
-    return std::make_shared<IteratorImpl>(prefix, get_snapshot_iterator());
-  }
-
   virtual uint64_t get_estimated_size(std::map<std::string,uint64_t> &extra) = 0;
   virtual int get_statfs(struct store_statfs_t *buf) {
     return -EOPNOTSUPP;
@@ -320,13 +313,15 @@ public:
     return -EOPNOTSUPP;
   }
 
+  virtual void get_statistics(Formatter *f) {
+    return;
+  }
 protected:
   /// List of matching prefixes and merge operators
   std::vector<std::pair<std::string,
 			std::shared_ptr<MergeOperator> > > merge_ops;
 
   virtual WholeSpaceIterator _get_iterator() = 0;
-  virtual WholeSpaceIterator _get_snapshot_iterator() = 0;
 };
 
 #endif

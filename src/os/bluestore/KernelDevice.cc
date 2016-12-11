@@ -46,7 +46,6 @@ KernelDevice::KernelDevice(aio_callback_t cb, void *cbpriv)
 {
   zeros = buffer::create_page_aligned(1048576);
   zeros.zero();
-  rotational = true;
 }
 
 int KernelDevice::_lock()
@@ -209,7 +208,7 @@ int KernelDevice::flush()
   if (r < 0) {
     r = -errno;
     derr << __func__ << " fdatasync got: " << cpp_strerror(r) << dendl;
-    assert(0);
+    ceph_abort();
   }
   dout(5) << __func__ << " in " << dur << dendl;;
   return r;
@@ -262,12 +261,14 @@ void KernelDevice::_aio_thread()
 	  std::lock_guard<std::mutex> l(debug_queue_lock);
 	  debug_aio_unlink(*aio[i]);
 	}
-	int left = --ioc->num_running;
 	int r = aio[i]->get_return_value();
 	dout(10) << __func__ << " finished aio " << aio[i] << " r " << r
 		 << " ioc " << ioc
 		 << " with " << left << " aios left" << dendl;
 	assert(r >= 0);
+	int left = --ioc->num_running;
+	// NOTE: once num_running is decremented we can no longer
+	// trust aio[] values; they my be freed (e.g., by BlueFS::_fsync)
 	if (left == 0) {
 	  // check waiting count before doing callback (which may
 	  // destroy this ioc).
@@ -327,7 +328,7 @@ void KernelDevice::_aio_log_start(
 	   << std::hex
 	   << offset << "~" << length << std::dec
 	   << " with " << debug_inflight << dendl;
-      assert(0);
+      ceph_abort();
     }
     debug_inflight.insert(offset, length);
   }
@@ -449,7 +450,7 @@ int KernelDevice::aio_write(
   bl.hexdump(*_dout);
   *_dout << dendl;
 
-  _aio_log_start(ioc, off, bl.length());
+  _aio_log_start(ioc, off, len);
 
 #ifdef HAVE_LIBAIO
   if (aio && dio && !buffered) {
@@ -472,7 +473,7 @@ int KernelDevice::aio_write(
 		 << " " << aio.iov[i].iov_len << dendl;
       }
       aio.bl.claim_append(bl);
-      aio.pwritev(off);
+      aio.pwritev(off, len);
     }
     dout(5) << __func__ << " 0x" << std::hex << off << "~" << len
 	    << std::dec << " aio " << &aio << dendl;
@@ -492,7 +493,7 @@ int KernelDevice::aio_write(
     bl.prepare_iov(&iov);
     int r = ::pwritev(buffered ? fd_buffered : fd_direct,
 		      &iov[0], iov.size(), off);
-    _aio_log_finish(ioc, off, bl.length());
+    _aio_log_finish(ioc, off, len);
 
     if (r < 0) {
       r = -errno;

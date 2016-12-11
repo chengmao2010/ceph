@@ -603,9 +603,9 @@ FileStore::FileStore(const std::string &base, const std::string &jdev, osflagbit
   PerfCountersBuilder plb(g_ceph_context, internal_name, l_filestore_first, l_filestore_last);
 
   plb.add_u64(l_filestore_journal_queue_ops, "journal_queue_ops", "Operations in journal queue");
-  plb.add_u64_counter(l_filestore_journal_ops, "journal_ops", "Total journal entries written");
+  plb.add_u64(l_filestore_journal_ops, "journal_ops", "Active journal entries to be applied");
   plb.add_u64(l_filestore_journal_queue_bytes, "journal_queue_bytes", "Size of journal queue");
-  plb.add_u64_counter(l_filestore_journal_bytes, "journal_bytes", "Total operations size in journal");
+  plb.add_u64(l_filestore_journal_bytes, "journal_bytes", "Active journal operation size to be applied");
   plb.add_time_avg(l_filestore_journal_latency, "journal_latency", "Average journal queue completing latency");
   plb.add_u64_counter(l_filestore_journal_wr, "journal_wr", "Journal write IOs");
   plb.add_u64_avg(l_filestore_journal_wr_bytes, "journal_wr_bytes", "Journal data written");
@@ -2122,7 +2122,7 @@ int FileStore::queue_transactions(Sequencer *posr, vector<Transaction>& tls,
 			       new C_JournaledAhead(this, osr, o, ondisk),
 			       osd_op);
     } else {
-      assert(0);
+      ceph_abort();
     }
     submit_manager.op_submit_finish(op_num);
     utime_t end = ceph_clock_now(g_ceph_context);
@@ -2933,7 +2933,7 @@ void FileStore::_do_transaction(
 
     default:
       derr << "bad op " << op->op << dendl;
-      assert(0);
+      ceph_abort();
     }
 
     if (r < 0) {
@@ -2942,7 +2942,14 @@ void FileStore::_do_transaction(
       if (r == -ENOENT && !(op->op == Transaction::OP_CLONERANGE ||
 			    op->op == Transaction::OP_CLONE ||
 			    op->op == Transaction::OP_CLONERANGE2 ||
-			    op->op == Transaction::OP_COLL_ADD))
+			    op->op == Transaction::OP_COLL_ADD ||
+			    op->op == Transaction::OP_SETATTR ||
+			    op->op == Transaction::OP_SETATTRS ||
+			    op->op == Transaction::OP_RMATTR ||
+			    op->op == Transaction::OP_OMAP_SETKEYS ||
+			    op->op == Transaction::OP_OMAP_RMKEYS ||
+			    op->op == Transaction::OP_OMAP_RMKEYRANGE ||
+			    op->op == Transaction::OP_OMAP_SETHEADER))
 	// -ENOENT is normally okay
 	// ...including on a replayed OP_RMCOLL with checkpoint mode
 	ok = true;
@@ -3158,7 +3165,6 @@ int FileStore::_do_fiemap(int fd, uint64_t offset, size_t len,
 {
   uint64_t i;
   struct fiemap_extent *extent = NULL;
-  struct fiemap_extent *last = NULL;
   struct fiemap *fiemap = NULL;
   int r = 0;
 
@@ -3182,6 +3188,7 @@ more:
 
   i = 0;
 
+  struct fiemap_extent *last = nullptr;
   while (i < fiemap->fm_mapped_extents) {
     struct fiemap_extent *next = extent + 1;
 
@@ -3204,8 +3211,9 @@ more:
     i++;
     last = extent++;
   }
+  const bool is_last = last->fe_flags & FIEMAP_EXTENT_LAST;
   free(fiemap);
-  if (!(last->fe_flags & FIEMAP_EXTENT_LAST)) {
+  if (!is_last) {
     uint64_t xoffset = last->fe_logical + last->fe_length - offset;
     offset = last->fe_logical + last->fe_length;
     len -= xoffset;
@@ -3858,7 +3866,7 @@ void FileStore::sync_entry()
       stringstream errstream;
       if (g_conf->filestore_debug_omap_check && !object_map->check(errstream)) {
 	derr << errstream.str() << dendl;
-	assert(0);
+	ceph_abort();
       }
 
       if (backend->can_checkpoint()) {
@@ -4045,7 +4053,7 @@ void FileStore::flush()
     lock.Lock();
     while (true)
       cond.Wait(lock);
-    assert(0);
+    ceph_abort();
   }
 
   if (m_filestore_journal_writeahead) {
@@ -4739,10 +4747,13 @@ int FileStore::collection_empty(const coll_t& c, bool *empty)
   tracepoint(objectstore, collection_empty_exit, *empty);
   return 0;
 }
-int FileStore::collection_list(const coll_t& c, ghobject_t start, ghobject_t end,
+int FileStore::collection_list(const coll_t& c,
+			       const ghobject_t& orig_start,
+			       const ghobject_t& end,
 			       bool sort_bitwise, int max,
 			       vector<ghobject_t> *ls, ghobject_t *next)
 {
+  ghobject_t start = orig_start;
   if (start.is_max())
     return 0;
 

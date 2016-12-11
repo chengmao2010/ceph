@@ -637,7 +637,7 @@ void BlueStore::LRUCache::_trim(uint64_t onode_max, uint64_t buffer_max)
       assert(num == 1);
     }
     o->get();  // paranoia
-    o->space->onode_map.erase(o->oid);
+    o->c->onode_map.onode_map.erase(o->oid);
     o->put();
     --num;
   }
@@ -892,7 +892,7 @@ void BlueStore::TwoQCache::_trim(uint64_t onode_max, uint64_t buffer_max)
       assert(num == 1);
     }
     o->get();  // paranoia
-    o->space->onode_map.erase(o->oid);
+    o->c->onode_map.onode_map.erase(o->oid);
     o->put();
     --num;
   }
@@ -1239,7 +1239,7 @@ void BlueStore::OnodeSpace::rename(OnodeRef& oldo,
   OnodeRef o = po->second;
 
   // install a non-existent onode at old location
-  oldo.reset(new Onode(this, o->c, old_oid, o->key));
+  oldo.reset(new Onode(o->c, old_oid, o->key));
   po->second = oldo;
   cache->_add_onode(po->second, 1);
 
@@ -1280,11 +1280,12 @@ ostream& operator<<(ostream& out, const BlueStore::SharedBlob& sb)
   return out << ")";
 }
 
-BlueStore::SharedBlob::SharedBlob(uint64_t i, const string& k, Cache *c)
+BlueStore::SharedBlob::SharedBlob(uint64_t i, Cache *c)
   : sbid(i),
-    key(k),
     bc(c)
 {
+  assert(sbid > 0);
+  get_shared_blob_key(sbid, &key);
 }
 
 BlueStore::SharedBlob::~SharedBlob()
@@ -1850,7 +1851,7 @@ bool BlueStore::ExtentMap::encode_some(uint32_t offset, uint32_t length,
       if ((blobid & BLOBID_FLAG_SAMELENGTH) == 0) {
 	denc_varint_lowz(p->length, app);
       }
-      pos = p->logical_offset + p->length;
+      pos = p->logical_end();
       if (include_blob) {
 	p->blob->encode(app, false);
       }
@@ -2076,7 +2077,7 @@ BlueStore::extent_map_t::iterator BlueStore::ExtentMap::seek_lextent(
   auto fp = extent_map.lower_bound(dummy);
   if (fp != extent_map.begin()) {
     --fp;
-    if (fp->logical_offset + fp->length <= offset) {
+    if (fp->logical_end() <= offset) {
       ++fp;
     }
   }
@@ -2123,7 +2124,7 @@ int BlueStore::ExtentMap::compress_extent_map(uint64_t offset, uint64_t length)
       break;  // stop after end
     }
     while (n != extent_map.end() &&
-	   p->logical_offset + p->length == n->logical_offset &&
+	   p->logical_end() == n->logical_offset &&
 	   p->blob == n->blob &&
 	   p->blob_offset + p->length == n->blob_offset &&
 	   n->logical_offset < shard_end) {
@@ -2147,6 +2148,9 @@ int BlueStore::ExtentMap::compress_extent_map(uint64_t offset, uint64_t length)
       }
     }
   }
+  if (removed && onode) {
+    onode->c->store->logger->inc(l_bluestore_extent_compress, removed);
+  }
   return removed;
 }
 
@@ -2162,7 +2166,7 @@ void BlueStore::ExtentMap::punch_hole(
       break;
     }
     if (p->logical_offset < offset) {
-      if (p->logical_offset + p->length > end) {
+      if (p->logical_end() > end) {
 	// split and deref middle
 	uint64_t front = offset - p->logical_offset;
 	old_extents->insert(
@@ -2175,7 +2179,7 @@ void BlueStore::ExtentMap::punch_hole(
 	break;
       } else {
 	// deref tail
-	assert(p->logical_offset + p->length > offset); // else seek_lextent bug
+	assert(p->logical_end() > offset); // else seek_lextent bug
 	uint64_t keep = offset - p->logical_offset;
 	old_extents->insert(*new Extent(offset, p->blob_offset + keep,
 					p->length - keep,  p->blob));
@@ -2192,7 +2196,7 @@ void BlueStore::ExtentMap::punch_hole(
       continue;
     }
     // deref head
-    uint64_t keep = (p->logical_offset + p->length) - end;
+    uint64_t keep = p->logical_end() - end;
     old_extents->insert(*new Extent(p->logical_offset, p->blob_offset,
 				    p->length - keep, p->blob));
     add(end, p->blob_offset + p->length - keep, keep, p->blob);
@@ -2291,7 +2295,7 @@ void BlueStore::Collection::open_shared_blob(BlobRef b)
   assert(!b->shared_blob);
   const bluestore_blob_t& blob = b->get_blob();
   if (!blob.is_shared()) {
-    b->shared_blob = new SharedBlob(0, string(), cache);
+    b->shared_blob = new SharedBlob(cache);
     return;
   }
 
@@ -2300,8 +2304,7 @@ void BlueStore::Collection::open_shared_blob(BlobRef b)
     dout(10) << __func__ << " sbid 0x" << std::hex << blob.sbid << std::dec
 	     << " had " << *b->shared_blob << dendl;
   } else {
-    b->shared_blob = new SharedBlob(blob.sbid, string(), cache);
-    get_shared_blob_key(blob.sbid, &b->shared_blob->key);
+    b->shared_blob = new SharedBlob(blob.sbid, cache);
     shared_blob_set.add(b->shared_blob.get());
     dout(10) << __func__ << " sbid 0x" << std::hex << blob.sbid << std::dec
 	     << " opened " << *b->shared_blob << dendl;
@@ -2359,7 +2362,7 @@ BlueStore::OnodeRef BlueStore::Collection::get_onode(
     if (!oid.match(cnode.bits, pgid.ps())) {
       derr << __func__ << " oid " << oid << " not part of " << pgid
 	   << " bits " << cnode.bits << dendl;
-      assert(0);
+      ceph_abort();
     }
   }
 
@@ -2384,11 +2387,11 @@ BlueStore::OnodeRef BlueStore::Collection::get_onode(
       return OnodeRef();
 
     // new object, new onode
-    on = new Onode(&onode_map, this, oid, key);
+    on = new Onode(this, oid, key);
   } else {
     // loaded
     assert(r >= 0);
-    on = new Onode(&onode_map, this, oid, key);
+    on = new Onode(this, oid, key);
     on->exists = true;
     bufferptr::iterator p = v.front().begin();
     on->onode.decode(p);
@@ -2713,12 +2716,10 @@ void BlueStore::_init_logger()
   b.add_u64(l_bluestore_txc, "bluestore_txc", "Transactions committed");
   b.add_u64(l_bluestore_onode_reshard, "bluestore_onode_reshard",
 	    "Onode extent map reshard events");
-  b.add_u64(l_bluestore_gc, "bluestore_gc",
-            "Sum for garbage collection reads");
-  b.add_u64(l_bluestore_gc_bytes, "bluestore_gc_bytes",
-            "garbage collected bytes");
   b.add_u64(l_bluestore_blob_split, "bluestore_blob_split",
             "Sum for blob splitting due to resharding");
+  b.add_u64(l_bluestore_extent_compress, "bluestore_extent_compress",
+            "Sum for extents that have been removed due to compression");
   logger = b.create_perf_counters();
   g_ceph_context->get_perfcounters_collection()->add(logger);
 }
@@ -3572,6 +3573,9 @@ int BlueStore::_balance_bluefs_freespace(vector<bluestore_pextent_t> *extents)
       uint32_t elength;
       r = alloc->allocate(gift, min_alloc_size, hint, &eoffset, &elength);
       if (r < 0) {
+	derr << __func__ << " allocate failed on 0x" << std::hex << gift
+	     << " min_alloc_size 0x" << min_alloc_size << std::dec << dendl;
+	alloc->dump();
         assert(0 == "allocate failed, wtf");
         return r;
       }
@@ -3890,35 +3894,6 @@ int BlueStore::mkfs()
   if (r < 0)
     goto out_close_alloc;
   dout(10) << __func__ << " success" << dendl;
-
-  if (bluefs &&
-      g_conf->bluestore_precondition_bluefs > 0) {
-    dout(10) << __func__ << " preconditioning with "
-	     << pretty_si_t(g_conf->bluestore_precondition_bluefs)
-	     << " in blocks of "
-	     << pretty_si_t(g_conf->bluestore_precondition_bluefs_block)
-	     << dendl;
-    unsigned n = g_conf->bluestore_precondition_bluefs /
-      g_conf->bluestore_precondition_bluefs_block;
-    bufferlist bl;
-    int len = g_conf->bluestore_precondition_bluefs_block;
-    char buf[len];
-    get_random_bytes(buf, len);
-    bl.append(buf, len);
-    string key1("a");
-    string key2("b");
-    for (unsigned i=0; i < n; ++i) {
-      KeyValueDB::Transaction t = db->get_transaction();
-      t->set(PREFIX_SUPER, (i & 1) ? key1 : key2, bl);
-      t->rmkey(PREFIX_SUPER, (i & 1) ? key2 : key1);
-      db->submit_transaction_sync(t);
-    }
-    KeyValueDB::Transaction t = db->get_transaction();
-    t->rmkey(PREFIX_SUPER, key1);
-    t->rmkey(PREFIX_SUPER, key2);
-    db->submit_transaction_sync(t);
-    dout(10) << __func__ << " done preconditioning" << dendl;
-  }
 
  out_close_alloc:
   _close_alloc();
@@ -4474,13 +4449,13 @@ int BlueStore::fsck(bool deep)
 	}
       }
       // omap
-      if (o->onode.omap_head) {
-	if (used_omap_head.count(o->onode.omap_head)) {
-	  derr << __func__ << " " << oid << " omap_head " << o->onode.omap_head
+      if (o->onode.has_omap()) {
+	if (used_omap_head.count(o->onode.nid)) {
+	  derr << __func__ << " " << oid << " omap_head " << o->onode.nid
 	       << " already in use" << dendl;
 	  ++errors;
 	} else {
-	  used_omap_head.insert(o->onode.omap_head);
+	  used_omap_head.insert(o->onode.nid);
 	}
       }
     }
@@ -5485,7 +5460,7 @@ int BlueStore::collection_bits(const coll_t& cid)
 }
 
 int BlueStore::collection_list(
-  const coll_t& cid, ghobject_t start, ghobject_t end,
+  const coll_t& cid, const ghobject_t& start, const ghobject_t& end,
   bool sort_bitwise, int max,
   vector<ghobject_t> *ls, ghobject_t *pnext)
 {
@@ -5496,7 +5471,7 @@ int BlueStore::collection_list(
 }
 
 int BlueStore::collection_list(
-  CollectionHandle &c_, ghobject_t start, ghobject_t end,
+  CollectionHandle &c_, const ghobject_t& start, const ghobject_t& end,
   bool sort_bitwise, int max,
   vector<ghobject_t> *ls, ghobject_t *pnext)
 {
@@ -5518,7 +5493,7 @@ int BlueStore::collection_list(
 }
 
 int BlueStore::_collection_list(
-  Collection* c, ghobject_t start, ghobject_t end,
+  Collection* c, const ghobject_t& start, const ghobject_t& end,
   bool sort_bitwise, int max,
   vector<ghobject_t> *ls, ghobject_t *pnext)
 {
@@ -5639,9 +5614,9 @@ BlueStore::OmapIteratorImpl::OmapIteratorImpl(
   : c(c), o(o), it(it)
 {
   RWLock::RLocker l(c->lock);
-  if (o->onode.omap_head) {
-    get_omap_key(o->onode.omap_head, string(), &head);
-    get_omap_tail(o->onode.omap_head, &tail);
+  if (o->onode.has_omap()) {
+    get_omap_key(o->onode.nid, string(), &head);
+    get_omap_tail(o->onode.nid, &tail);
     it->lower_bound(head);
   }
 }
@@ -5649,7 +5624,7 @@ BlueStore::OmapIteratorImpl::OmapIteratorImpl(
 int BlueStore::OmapIteratorImpl::seek_to_first()
 {
   RWLock::RLocker l(c->lock);
-  if (o->onode.omap_head) {
+  if (o->onode.has_omap()) {
     it->lower_bound(head);
   } else {
     it = KeyValueDB::Iterator();
@@ -5660,9 +5635,9 @@ int BlueStore::OmapIteratorImpl::seek_to_first()
 int BlueStore::OmapIteratorImpl::upper_bound(const string& after)
 {
   RWLock::RLocker l(c->lock);
-  if (o->onode.omap_head) {
+  if (o->onode.has_omap()) {
     string key;
-    get_omap_key(o->onode.omap_head, after, &key);
+    get_omap_key(o->onode.nid, after, &key);
     it->upper_bound(key);
   } else {
     it = KeyValueDB::Iterator();
@@ -5673,9 +5648,9 @@ int BlueStore::OmapIteratorImpl::upper_bound(const string& after)
 int BlueStore::OmapIteratorImpl::lower_bound(const string& to)
 {
   RWLock::RLocker l(c->lock);
-  if (o->onode.omap_head) {
+  if (o->onode.has_omap()) {
     string key;
-    get_omap_key(o->onode.omap_head, to, &key);
+    get_omap_key(o->onode.nid, to, &key);
     it->lower_bound(key);
   } else {
     it = KeyValueDB::Iterator();
@@ -5686,13 +5661,13 @@ int BlueStore::OmapIteratorImpl::lower_bound(const string& to)
 bool BlueStore::OmapIteratorImpl::valid()
 {
   RWLock::RLocker l(c->lock);
-  return o->onode.omap_head && it->valid() && it->raw_key().second <= tail;
+  return o->onode.has_omap() && it->valid() && it->raw_key().second <= tail;
 }
 
 int BlueStore::OmapIteratorImpl::next(bool validate)
 {
   RWLock::RLocker l(c->lock);
-  if (o->onode.omap_head) {
+  if (o->onode.has_omap()) {
     it->next();
     return 0;
   } else {
@@ -5748,14 +5723,14 @@ int BlueStore::omap_get(
     r = -ENOENT;
     goto out;
   }
-  if (!o->onode.omap_head)
+  if (!o->onode.has_omap())
     goto out;
   o->flush();
   {
     KeyValueDB::Iterator it = db->get_iterator(PREFIX_OMAP);
     string head, tail;
-    get_omap_header(o->onode.omap_head, &head);
-    get_omap_tail(o->onode.omap_head, &tail);
+    get_omap_header(o->onode.nid, &head);
+    get_omap_tail(o->onode.nid, &tail);
     it->lower_bound(head);
     while (it->valid()) {
       if (it->key() == head) {
@@ -5811,12 +5786,12 @@ int BlueStore::omap_get_header(
     r = -ENOENT;
     goto out;
   }
-  if (!o->onode.omap_head)
+  if (!o->onode.has_omap())
     goto out;
   o->flush();
   {
     string head;
-    get_omap_header(o->onode.omap_head, &head);
+    get_omap_header(o->onode.nid, &head);
     if (db->get(PREFIX_OMAP, head, header) >= 0) {
       dout(30) << __func__ << "  got header" << dendl;
     } else {
@@ -5858,14 +5833,14 @@ int BlueStore::omap_get_keys(
     r = -ENOENT;
     goto out;
   }
-  if (!o->onode.omap_head)
+  if (!o->onode.has_omap())
     goto out;
   o->flush();
   {
     KeyValueDB::Iterator it = db->get_iterator(PREFIX_OMAP);
     string head, tail;
-    get_omap_key(o->onode.omap_head, string(), &head);
-    get_omap_tail(o->onode.omap_head, &tail);
+    get_omap_key(o->onode.nid, string(), &head);
+    get_omap_tail(o->onode.nid, &tail);
     it->lower_bound(head);
     while (it->valid()) {
       if (it->key() >= tail) {
@@ -5918,10 +5893,10 @@ int BlueStore::omap_get_values(
     r = -ENOENT;
     goto out;
   }
-  if (!o->onode.omap_head)
+  if (!o->onode.has_omap())
     goto out;
   o->flush();
-  _key_encode_u64(o->onode.omap_head, &final_key);
+  _key_encode_u64(o->onode.nid, &final_key);
   final_key.push_back('.');
   for (set<string>::const_iterator p = keys.begin(); p != keys.end(); ++p) {
     final_key.resize(9); // keep prefix
@@ -5971,10 +5946,10 @@ int BlueStore::omap_check_keys(
     r = -ENOENT;
     goto out;
   }
-  if (!o->onode.omap_head)
+  if (!o->onode.has_omap())
     goto out;
   o->flush();
-  _key_encode_u64(o->onode.omap_head, &final_key);
+  _key_encode_u64(o->onode.nid, &final_key);
   final_key.push_back('.');
   for (set<string>::const_iterator p = keys.begin(); p != keys.end(); ++p) {
     final_key.resize(9); // keep prefix
@@ -6025,7 +6000,7 @@ ObjectMap::ObjectMapIterator BlueStore::get_omap_iterator(
     return ObjectMap::ObjectMapIterator();
   }
   o->flush();
-  dout(10) << __func__ << " header = " << o->onode.omap_head <<dendl;
+  dout(10) << __func__ << " has_omap = " << (int)o->onode.has_omap() <<dendl;
   KeyValueDB::Iterator it = db->get_iterator(PREFIX_OMAP);
   return ObjectMap::ObjectMapIterator(new OmapIteratorImpl(c, o, it));
 }
@@ -6161,6 +6136,10 @@ uint64_t BlueStore::_assign_blobid(TransContext *txc)
   return bid;
 }
 
+void BlueStore::get_db_statistics(Formatter *f)
+{
+  db->get_statistics(f);
+}
 
 BlueStore::TransContext *BlueStore::_txc_create(OpSequencer *osr)
 {
@@ -6200,6 +6179,7 @@ void BlueStore::_txc_state_proc(TransContext *txc)
       txc->log_state_latency(logger, l_bluestore_state_prepare_lat);
       if (txc->ioc.has_pending_aios()) {
 	txc->state = TransContext::STATE_AIO_WAIT;
+	txc->had_ios = true;
 	_txc_aio_submit(txc);
 	return;
       }
@@ -6212,6 +6192,9 @@ void BlueStore::_txc_state_proc(TransContext *txc)
 
     case TransContext::STATE_IO_DONE:
       //assert(txc->osr->qlock.is_locked());  // see _txc_finish_io
+      if (txc->had_ios) {
+	++txc->osr->txc_with_unstable_io;
+      }
       txc->log_state_latency(logger, l_bluestore_state_io_done_lat);
       txc->state = TransContext::STATE_KV_QUEUED;
       for (auto& sb : txc->shared_blobs_written) {
@@ -6232,6 +6215,9 @@ void BlueStore::_txc_state_proc(TransContext *txc)
 	  // sequencer that is committing serially it is possible to keep
 	  // submitting new transactions fast enough that we get stuck doing
 	  // so.  the alternative is to block here... fixme?
+	} else if (txc->osr->txc_with_unstable_io) {
+	  dout(20) << __func__ << " prior txc(s) with unstable ios "
+		   << txc->osr->txc_with_unstable_io.load() << dendl;
 	} else if (g_conf->bluestore_debug_randomize_serial_transaction &&
 		   rand() % g_conf->bluestore_debug_randomize_serial_transaction
 		   == 0) {
@@ -6239,7 +6225,7 @@ void BlueStore::_txc_state_proc(TransContext *txc)
 		   << dendl;
 	} else {
 	  _txc_finalize_kv(txc, txc->t);
-	  txc->kv_submitted = true;
+	  txc->state = TransContext::STATE_KV_SUBMITTED;
 	  int r = db->submit_transaction(txc->t);
 	  assert(r == 0);
 	}
@@ -6248,13 +6234,13 @@ void BlueStore::_txc_state_proc(TransContext *txc)
 	std::lock_guard<std::mutex> l(kv_lock);
 	kv_queue.push_back(txc);
 	kv_cond.notify_one();
-	if (!txc->kv_submitted) {
+	if (txc->state != TransContext::STATE_KV_SUBMITTED) {
 	  kv_queue_unsubmitted.push_back(txc);
 	  ++txc->osr->kv_committing_serially;
 	}
       }
       return;
-    case TransContext::STATE_KV_QUEUED:
+    case TransContext::STATE_KV_SUBMITTED:
       txc->log_state_latency(logger, l_bluestore_state_kv_committing_lat);
       txc->state = TransContext::STATE_KV_DONE;
       _txc_finish_kv(txc);
@@ -6518,9 +6504,9 @@ void BlueStore::_osr_reap_done(OpSequencer *osr)
       txc->log_state_latency(logger, l_bluestore_state_done_lat);
       delete txc;
       osr->qcond.notify_all();
-      if (osr->q.empty())
-        dout(20) << __func__ << " osr " << osr << " q now empty" << dendl;
     }
+    if (osr->q.empty())
+      dout(20) << __func__ << " osr " << osr << " q now empty" << dendl;
   }
 
   if (c) {
@@ -6573,6 +6559,11 @@ void BlueStore::_txc_finalize_kv(TransContext *txc, KeyValueDB::Transaction t)
     fm->release(p.get_start(), p.get_len(), t);
   }
 
+  _txc_update_store_statfs(txc);
+}
+
+void BlueStore::_txc_release_alloc(TransContext *txc)
+{
   // update allocator with full released set
   if (!g_conf->bluestore_debug_no_reuse_blocks) {
     for (interval_set<uint64_t>::iterator p = txc->released.begin();
@@ -6584,7 +6575,6 @@ void BlueStore::_txc_finalize_kv(TransContext *txc, KeyValueDB::Transaction t)
 
   txc->allocated.clear();
   txc->released.clear();
-  _txc_update_store_statfs(txc);
 }
 
 void BlueStore::_kv_sync_thread()
@@ -6648,13 +6638,19 @@ void BlueStore::_kv_sync_thread()
 	dout(10) << __func__ << " new_blobid_max " << new_blobid_max << dendl;
       }
       for (auto txc : kv_submitting) {
-	assert(!txc->kv_submitted);
+	assert(txc->state == TransContext::STATE_KV_QUEUED);
 	_txc_finalize_kv(txc, txc->t);
 	txc->log_state_latency(logger, l_bluestore_state_kv_queued_lat);
 	int r = db->submit_transaction(txc->t);
 	assert(r == 0);
 	--txc->osr->kv_committing_serially;
-	txc->kv_submitted = true;
+	txc->state = TransContext::STATE_KV_SUBMITTED;
+      }
+      for (auto txc : kv_committing) {
+	_txc_release_alloc(txc);
+	if (txc->had_ios) {
+	  --txc->osr->txc_with_unstable_io;
+	}
       }
 
       vector<bluestore_pextent_t> bluefs_gift_extents;
@@ -6706,7 +6702,7 @@ void BlueStore::_kv_sync_thread()
 	       << " in " << dur << dendl;
       while (!kv_committing.empty()) {
 	TransContext *txc = kv_committing.front();
-	assert(txc->kv_submitted);
+	assert(txc->state == TransContext::STATE_KV_SUBMITTED);
 	_txc_state_proc(txc);
 	kv_committing.pop_front();
       }
@@ -7234,7 +7230,7 @@ void BlueStore::_txc_add_transaction(TransContext *txc, Transaction *t)
 
     default:
       derr << __func__ << "bad op " << op->op << dendl;
-      assert(0);
+      ceph_abort();
     }
 
   endop:
@@ -7244,7 +7240,14 @@ void BlueStore::_txc_add_transaction(TransContext *txc, Transaction *t)
       if (r == -ENOENT && !(op->op == Transaction::OP_CLONERANGE ||
 			    op->op == Transaction::OP_CLONE ||
 			    op->op == Transaction::OP_CLONERANGE2 ||
-			    op->op == Transaction::OP_COLL_ADD))
+			    op->op == Transaction::OP_COLL_ADD ||
+			    op->op == Transaction::OP_SETATTR ||
+			    op->op == Transaction::OP_SETATTRS ||
+			    op->op == Transaction::OP_RMATTR ||
+			    op->op == Transaction::OP_OMAP_SETKEYS ||
+			    op->op == Transaction::OP_OMAP_RMKEYS ||
+			    op->op == Transaction::OP_OMAP_RMKEYRANGE ||
+			    op->op == Transaction::OP_OMAP_SETHEADER))
 	// -ENOENT is usually okay
 	ok = true;
       if (r == -ENODATA)
@@ -7980,6 +7983,7 @@ int BlueStore::_do_write(
 	   << " - have 0x" << o->onode.size
 	   << " (" << std::dec << o->onode.size << ")"
 	   << " bytes"
+	   << " fadvise_flags 0x" << std::hex << fadvise_flags << std::dec
 	   << dendl;
   _dump_onode(o);
 
@@ -8031,7 +8035,8 @@ int BlueStore::_do_write(
 			CEPH_OSD_ALLOC_HINT_FLAG_APPEND_ONLY)) &&
       (alloc_hints & CEPH_OSD_ALLOC_HINT_FLAG_RANDOM_WRITE) == 0) {
     dout(20) << __func__ << " will prefer large blob and csum sizes" << dendl;
-    wctx.csum_order = min_alloc_size_order;
+    wctx.csum_order = std::max(min_alloc_size_order,
+			       (size_t)ctzl(o->onode.expected_write_size));
     if (wctx.compress) {
       wctx.target_blob_size = select_option(
         "compression_max_blob_size",
@@ -8228,8 +8233,9 @@ int BlueStore::_do_remove(
   int r = _do_truncate(txc, c, o, 0);
   if (r < 0)
     return r;
-  if (o->onode.omap_head) {
-    _do_omap_clear(txc, o->onode.omap_head);
+  if (o->onode.has_omap()) {
+    o->flush();
+    _do_omap_clear(txc, o->onode.nid);
   }
   o->exists = false;
   o->onode = bluestore_onode_t();
@@ -8263,7 +8269,10 @@ int BlueStore::_setattr(TransContext *txc,
 	   << " " << name << " (" << val.length() << " bytes)"
 	   << dendl;
   int r = 0;
-  o->onode.attrs[name] = val;
+  if (val.is_partial())
+    o->onode.attrs[name] = bufferptr(val.c_str(), val.length());
+  else
+    o->onode.attrs[name] = val;
   txc->write_onode(o);
   dout(10) << __func__ << " " << c->cid << " " << o->oid
 	   << " " << name << " (" << val.length() << " bytes)"
@@ -8359,9 +8368,10 @@ int BlueStore::_omap_clear(TransContext *txc,
 {
   dout(15) << __func__ << " " << c->cid << " " << o->oid << dendl;
   int r = 0;
-  if (o->onode.omap_head != 0) {
-    _do_omap_clear(txc, o->onode.omap_head);
-    o->onode.omap_head = 0;
+  if (o->onode.has_omap()) {
+    o->flush();
+    _do_omap_clear(txc, o->onode.nid);
+    o->onode.clear_omap_flag();
     txc->write_onode(o);
   }
   dout(10) << __func__ << " " << c->cid << " " << o->oid << " = " << r << dendl;
@@ -8377,12 +8387,12 @@ int BlueStore::_omap_setkeys(TransContext *txc,
   int r;
   bufferlist::iterator p = bl.begin();
   __u32 num;
-  if (!o->onode.omap_head) {
-    o->onode.omap_head = o->onode.nid;
+  if (!o->onode.has_omap()) {
+    o->onode.set_omap_flag();
     txc->write_onode(o);
   }
   string final_key;
-  _key_encode_u64(o->onode.omap_head, &final_key);
+  _key_encode_u64(o->onode.nid, &final_key);
   final_key.push_back('.');
   ::decode(num, p);
   while (num--) {
@@ -8409,11 +8419,11 @@ int BlueStore::_omap_setheader(TransContext *txc,
   dout(15) << __func__ << " " << c->cid << " " << o->oid << dendl;
   int r;
   string key;
-  if (!o->onode.omap_head) {
-    o->onode.omap_head = o->onode.nid;
+  if (!o->onode.has_omap()) {
+    o->onode.set_omap_flag();
     txc->write_onode(o);
   }
-  get_omap_header(o->onode.omap_head, &key);
+  get_omap_header(o->onode.nid, &key);
   txc->t->set(PREFIX_OMAP, key, bl);
   r = 0;
   dout(10) << __func__ << " " << c->cid << " " << o->oid << " = " << r << dendl;
@@ -8431,10 +8441,10 @@ int BlueStore::_omap_rmkeys(TransContext *txc,
   __u32 num;
   string final_key;
 
-  if (!o->onode.omap_head) {
+  if (!o->onode.has_omap()) {
     goto out;
   }
-  _key_encode_u64(o->onode.omap_head, &final_key);
+  _key_encode_u64(o->onode.nid, &final_key);
   final_key.push_back('.');
   ::decode(num, p);
   while (num--) {
@@ -8461,12 +8471,13 @@ int BlueStore::_omap_rmkey_range(TransContext *txc,
   KeyValueDB::Iterator it;
   string key_first, key_last;
   int r = 0;
-  if (!o->onode.omap_head) {
+  if (!o->onode.has_omap()) {
     goto out;
   }
+  o->flush();
   it = db->get_iterator(PREFIX_OMAP);
-  get_omap_key(o->onode.omap_head, first, &key_first);
-  get_omap_key(o->onode.omap_head, last, &key_last);
+  get_omap_key(o->onode.nid, first, &key_first);
+  get_omap_key(o->onode.nid, last, &key_last);
   it->lower_bound(key_first);
   while (it->valid()) {
     if (it->key() >= key_last) {
@@ -8548,19 +8559,20 @@ int BlueStore::_clone(TransContext *txc,
   newo->onode.attrs = oldo->onode.attrs;
 
   // clone omap
-  if (newo->onode.omap_head) {
+  if (newo->onode.has_omap()) {
     dout(20) << __func__ << " clearing old omap data" << dendl;
-    _do_omap_clear(txc, newo->onode.omap_head);
+    newo->flush();
+    _do_omap_clear(txc, newo->onode.nid);
   }
-  if (oldo->onode.omap_head) {
+  if (oldo->onode.has_omap()) {
     dout(20) << __func__ << " copying omap data" << dendl;
-    if (!newo->onode.omap_head) {
-      newo->onode.omap_head = newo->onode.nid;
+    if (!newo->onode.has_omap()) {
+      newo->onode.set_omap_flag();
     }
     KeyValueDB::Iterator it = db->get_iterator(PREFIX_OMAP);
     string head, tail;
-    get_omap_header(oldo->onode.omap_head, &head);
-    get_omap_tail(oldo->onode.omap_head, &tail);
+    get_omap_header(oldo->onode.nid, &head);
+    get_omap_tail(oldo->onode.nid, &tail);
     it->lower_bound(head);
     while (it->valid()) {
       if (it->key() >= tail) {
@@ -8570,7 +8582,7 @@ int BlueStore::_clone(TransContext *txc,
 	dout(30) << __func__ << "  got header/data "
 		 << pretty_binary_string(it->key()) << dendl;
         string key;
-	rewrite_omap_key(newo->onode.omap_head, it->key(), &key);
+	rewrite_omap_key(newo->onode.nid, it->key(), &key);
 	txc->t->set(PREFIX_OMAP, key, it->value());
       }
       it->next();

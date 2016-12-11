@@ -1125,7 +1125,7 @@ int CrushWrapper::remove_rule(int ruleno)
   return 0;
 }
 
-void CrushWrapper::encode(bufferlist& bl, bool lean) const
+void CrushWrapper::encode(bufferlist& bl, uint64_t features) const
 {
   assert(crush);
 
@@ -1185,7 +1185,7 @@ void CrushWrapper::encode(bufferlist& bl, bool lean) const
       break;
 
     default:
-      assert(0);
+      ceph_abort();
       break;
     }
   }
@@ -1216,7 +1216,9 @@ void CrushWrapper::encode(bufferlist& bl, bool lean) const
   ::encode(crush->chooseleaf_vary_r, bl);
   ::encode(crush->straw_calc_version, bl);
   ::encode(crush->allowed_bucket_algs, bl);
-  ::encode(crush->chooseleaf_stable, bl);
+  if (features & CEPH_FEATURE_CRUSH_TUNABLES5) {
+    ::encode(crush->chooseleaf_stable, bl);
+  }
 }
 
 static void decode_32_or_64_string_map(map<int32_t,string>& m, bufferlist::iterator& blp)
@@ -1414,7 +1416,7 @@ void CrushWrapper::decode_crush_bucket(crush_bucket** bptr, bufferlist::iterator
 
   default:
     // We should have handled this case in the first switch statement
-    assert(0);
+    ceph_abort();
     break;
   }
 }
