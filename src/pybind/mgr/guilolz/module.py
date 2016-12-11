@@ -7,6 +7,7 @@ Demonstrate writing a Ceph web interface inside a mgr module.
 # gatekeeper to all accesses to data from the C++ side (e.g. the REST API
 # request handlers need to see it)
 from collections import defaultdict
+import collections
 
 _global_instance = {'plugin': None}
 def global_instance():
@@ -37,6 +38,11 @@ django_log.addHandler(logging.StreamHandler())
 django_log.setLevel(logging.DEBUG)
 
 
+# How many cluster log lines shall we hold onto in our
+# python module for the convenience of the GUI?
+LOG_BUFFER_SIZE = 30
+
+
 def recurse_refs(root, path):
     if isinstance(root, dict):
         for k, v in root.items():
@@ -55,10 +61,13 @@ class Module(MgrModule):
         self.log.info("Constructing module {0}: instance {1}".format(
             __name__, _global_instance))
 
+        self.log_buffer = collections.deque(maxlen=LOG_BUFFER_SIZE)
+
     def notify(self, notify_type, notify_val):
         if notify_type == "clog":
             log.info("clog: {0}".format(notify_val["message"]))
             log.info("clog: {0}".format(json.dumps(notify_val)))
+            self.log_buffer.appendleft(notify_val)
         else:
             pass
 
@@ -159,8 +168,6 @@ class Module(MgrModule):
 
     def fs_status(self, fs_id):
         mds_versions = defaultdict(list)
-
-        filesystems = []
 
         fsmap = self.get("fs_map")
         filesystem = None
@@ -396,6 +403,7 @@ class Module(MgrModule):
                     "mon_status": global_instance().get_sync_object(
                         MonStatus).data,
                     "osd_map": osd_map,
+                    "clog": list(global_instance().log_buffer),
                     "pools": pools
                 }
 
@@ -417,6 +425,7 @@ class Module(MgrModule):
             @cherrypy.tools.json_out()
             def toplevel_data(self):
                 return self._toplevel_data()
+
 
         # Configure django.request logger
         logging.getLogger("django.request").handlers = self.log.handlers

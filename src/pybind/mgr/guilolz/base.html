@@ -45,6 +45,16 @@
                 templateDelimiters: ["{", "}"]
             });
 
+            rivets.formatters.health_color = function(status_str) {
+                if (status_str == "HEALTH_OK") {
+                    return "color: #00bb00;";
+                } else if (status_str == "HEALTH_WARN") {
+                    return "color: #ffff00;";
+                } else if (status_str == "HEALTH_ERR") {
+                    return "color: #ff0000;"
+                }
+            }
+
             rivets.formatters.dimless = function(n){
                 var width=4;
                 var units = [' ', 'k', 'M', 'G', 'T', 'P'];
@@ -101,8 +111,11 @@
                 <span class="sr-only">Toggle navigation</span>
             </a>
 
-            <div id="health">
-                Overall: {overall_status}
+            <div id="health" style="font-size: 20px; padding: 12px 12px; background-color: #b8d0dd;">
+                Health:&nbsp;
+                <span rv-style="overall_status | health_color">
+                    {overall_status}
+                </span>
             </div>
 
             <!-- Navbar Right Menu -->
@@ -250,10 +263,6 @@
 <!-- Bootstrap 3.3.6 -->
 
 <!-- AdminLTE App -->
-
-
-
-
 
 
 </body>

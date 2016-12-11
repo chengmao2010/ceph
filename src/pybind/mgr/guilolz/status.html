@@ -14,13 +14,19 @@
                 });
             };
 
+            // Generate a "width: xx%" style string for use with a progress
+            // bar element showing a pool's used space.
+            rivets.formatters.pool_size_bar = function(pool){
+                var ratio = pool.used / pool.avail;
+
+                return "width: " + Math.round(ratio * 100).toString() + "%";
+            };
+
             console.log(content_data.fs_status);
             rivets.bind($("div#content"), content_data.fs_status);
             console.log($("div#content").length);
             setTimeout(refresh, 5000);
         });
-
-
 </script>
 
 
@@ -31,17 +37,9 @@
 </section>
 
 <section class="content">
-    <div class="info-box bg-red">
-        <!-- Apply any bg-* class to to the icon to color it -->
-        <span class="info-box-icon"><i class="fa fa-desktop"></i></span>
-
-        <div class="info-box-content">
-            <span class="info-box-text">Clients</span>
-            <span class="info-box-number">{filesystem.client_count}</span>
-        </div>
-        <!-- /.info-box-content -->
-    </div>
-    <!-- /.info-box -->
+    <p style="font-size: 1.3em;">
+        <i class="fa fa-desktop"></i>&nbsp;&nbsp;Clients: <span style="font-weight:bold;">{filesystem.client_count}</span>
+    </p>
 
     <div class="row">
         <div class="col-sm-6">
@@ -101,7 +99,7 @@
                                 <div class="progress"
                                      style="width: 100px; height: 20px;">
                                     <div class="progress-bar progress-bar-red"
-                                         style="width: 70%"></div>
+                                         rv-style="pool | pool_size_bar"></div>
                                 </div>
                             </td>
                         </tr>

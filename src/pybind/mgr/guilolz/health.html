@@ -16,16 +16,25 @@
             };
             setTimeout(refresh, 5000);
 
-            console.log(content_data.osd_map);
-            console.log(content_data.pools);
-
             rivets.formatters.mon_summary = function(mon_status) {
                 var result = mon_status.monmap.mons.length.toString() + " (quorum ";
                 result += mon_status.quorum.join(", ");
                 result += ")";
 
                 return result;
-            }
+            };
+
+            rivets.formatters.log_color = function(log_line) {
+                if (log_line.priority == "[INF]") {
+                    return "color: #000000";
+                } else if (log_line.priority == "[WRN]") {
+                    return "color: #FFC200";
+                } else if (log_line.priority == "[ERR]") {
+                    return "color: #FF2222";
+                } else {
+                    return "";
+                }
+            };
 
             rivets.formatters.osd_summary = function(osd_map) {
                 var in_count = 0;
@@ -67,7 +76,7 @@
     <!-- Main content -->
     <section class="content">
 
-    Overall status: {health.overall_status}
+    Overall status: <span rv-style="health.overall_status | health_color">{health.overall_status}</span>
 
     <ul>
         <li rv-each-summary="health.summary">
@@ -129,12 +138,32 @@
                             {pool.stats.max_avail | dimless }
                         </td>
                         <td>
+                            <!-- FIXME make rates of these -->
                             {pool.stats.rd_bytes | dimless } rd, {
                             pool.stats.wr_bytes| dimless } wr
                         </td>
                     </tr>
                     </tbody>
                 </table>
+            </div>
+
+        </div>
+
+        <div class="box">
+            <div class="box-header">
+                Cluster log
+            </div>
+            <div class="box-body" style="font-family:monospace; background-color: #ddd; color: #333">
+                <span >
+                    <span rv-each-line="clog">
+                        { line.stamp }&nbsp;{line.priority}&nbsp;
+                        <span  rv-style="line | log_color">
+                            <span style="font-weight: bold;">
+                                { line.message }
+                            </span><br>
+                        </span>
+                    </span>
+                </span>
             </div>
 
         </div>
