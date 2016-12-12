@@ -27,6 +27,11 @@
     <script src="/static/AdminLTE-2.3.7/bootstrap/js/bootstrap.min.js"></script>
     <script src="/static/AdminLTE-2.3.7/dist/js/app.min.js"></script>
 
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.17.1/moment.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/2.4.0/Chart.min.js"></script>
+
+
+
       <script>
         $(document).ready(function(){
             var toplevel_data = {{ toplevel_data }};
@@ -49,7 +54,7 @@
                 if (status_str == "HEALTH_OK") {
                     return "color: #00bb00;";
                 } else if (status_str == "HEALTH_WARN") {
-                    return "color: #ffff00;";
+                    return "color: #FFC200;";
                 } else if (status_str == "HEALTH_ERR") {
                     return "color: #ff0000;"
                 }
@@ -111,7 +116,7 @@
                 <span class="sr-only">Toggle navigation</span>
             </a>
 
-            <div id="health" style="font-size: 20px; padding: 12px 12px; background-color: #b8d0dd;">
+            <div id="health" style="font-size: 20px; padding: 12px 12px;">
                 Health:&nbsp;
                 <span rv-style="overall_status | health_color">
                     {overall_status}
