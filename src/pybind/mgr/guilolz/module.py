@@ -426,6 +426,56 @@ class Module(MgrModule):
             def toplevel_data(self):
                 return self._toplevel_data()
 
+            def _get_mds_names(self, filesystem_id=None):
+                names = []
+
+                fsmap = global_instance().get("fs_map")
+                for fs in fsmap['filesystems']:
+                    if filesystem_id is not None and fs['id'] != filesystem_id:
+                        continue
+                    names.extend([info['name'] for _, info in fs['mdsmap']['info'].items()])
+
+                if filesystem_id is None:
+                    names.extend(info['name'] for info in fsmap['standbys'])
+
+                return names
+
+            @cherrypy.expose
+            @cherrypy.tools.json_out()
+            def mds_counters(self, fs_id):
+                """
+                Result format: map of daemon name to map of counter to list of datapoints
+                """
+
+                # Opinionated list of interesting performance counters for the GUI --
+                # if you need something else just add it.  See how simple life is
+                # when you don't have to write general purpose APIs?
+                counters = [
+                    "mds_server.handle_client_request",
+                    "mds_log.ev",
+                    "mds_cache.num_strays",
+                    "mds.exported",
+                    "mds.exported_inodes",
+                    "mds.imported",
+                    "mds.imported_inodes",
+                    "mds.inodes",
+                    "mds.caps",
+                    "mds.subtrees"
+                ]
+
+                result = {}
+                mds_names = self._get_mds_names(int(fs_id))
+
+                for mds_name in mds_names:
+                    result[mds_name] = {}
+                    for counter in counters:
+                        data = global_instance().get_counter("mds", mds_name, counter)
+                        if data is not None:
+                            result[mds_name][counter] = data[counter]
+                        else:
+                            result[mds_name][counter] = []
+
+                return dict(result)
 
         # Configure django.request logger
         logging.getLogger("django.request").handlers = self.log.handlers
