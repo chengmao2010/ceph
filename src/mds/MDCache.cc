@@ -6420,7 +6420,8 @@ bool MDCache::trim(int max, int count)
     }
     if (!dn->get_linkage()->is_null()) {
       trimming_nulls = false;
-      if (lru.lru_get_size() + unexpirable <= (unsigned)max) {
+      if (lru.lru_get_size() + unexpirable < (unsigned)max) {
+        lru.lru_bottouch(dn);
         break;
       }
     }
